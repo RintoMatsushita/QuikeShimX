@@ -1,0 +1,1238 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>地震シミュレーター vβ（UI改良＋津波機能）</title>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+
+<style>
+:root{ --bg:#070d14; --panel:#0d1620; --muted:#9fb0b8; --accent:#57c7ff; --glass:rgba(255,255,255,0.06) }
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:linear-gradient(180deg,#020305,var(--bg));color:#eaf6ff;font-family:"Noto Sans JP",system-ui,Segoe UI,Roboto,Helvetica,Arial}
+button{cursor:pointer;border:none;border-radius:10px;padding:10px 14px;background:rgba(255,255,255,0.08);color:#eaf6ff;transition:all .2s}
+button.primary{background:linear-gradient(180deg,var(--accent),#2aa8d6);color:#05131a;font-weight:800}
+button.ghost{background:transparent;border:1px solid rgba(255,255,255,0.1);color:var(--muted)}
+button:hover{opacity:0.85}
+input[type="number"],input[type="text"],select,input[type="range"],input[type="url"],input[type="password"]{width:100%;padding:8px;border-radius:10px;border:none;background:rgba(255,255,255,0.08);color:#eaf6ff}
+label{display:block;color:var(--muted);font-size:12px;margin:6px 0 4px}
+small,.small{color:var(--muted);font-size:12px}
+
+/* Title */
+#title{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:linear-gradient(180deg,rgba(0,0,0,0.55),rgba(0,0,0,0.8));z-index:1000}
+#titleCard{width:min(1180px,96vw);height:min(760px,94vh);display:grid;grid-template-columns:1fr 380px;border-radius:16px;overflow:hidden;border:1px solid rgba(255,255,255,0.08);background:linear-gradient(180deg,#08101e,#0b121b);box-shadow:0 30px 80px rgba(0,0,0,0.65)}
+#tLeft{padding:26px;display:flex;gap:12px;flex-direction:column}
+#tLeft h1{margin:0;font-size:34px;color:var(--accent)}
+#titleMap{flex:1;border-radius:10px;overflow:hidden;border:1px solid rgba(255,255,255,0.06);background:#fff;display:flex;align-items:center;justify-content:center}
+#tRight{padding:18px;display:flex;flex-direction:column;gap:12px;background:linear-gradient(180deg,rgba(255,255,255,0.03),transparent)}
+.slide{background:var(--glass);padding:12px;border-radius:10px;border:1px solid rgba(255,255,255,0.06);min-height:150px;display:flex;flex-direction:column;gap:8px}
+.slideNav{display:flex;justify-content:space-between;align-items:center;margin-top:6px}
+.titleBtns{display:flex;gap:10px;flex-wrap:wrap}
+#btnStart{font-size:18px;padding:12px 20px}
+@media (max-width:980px){ #titleCard{grid-template-columns:1fr} #btnStart{width:100%} }
+
+/* Main layout */
+#app{display:none;height:100vh;padding:10px}
+.layout{display:grid;grid-template-columns:1fr 390px;gap:12px;height:calc(100vh - 20px)}
+@media (max-width:1120px){ .layout{grid-template-columns:1fr} #panel{height:48vh} }
+#mapWrap{position:relative}
+#map{width:100%;height:100%;min-height:54vh;border-radius:14px;overflow:hidden;box-shadow:0 10px 30px rgba(0,0,0,0.6);z-index:1}
+
+/* Right panel */
+/* 右パネル全体に常にスクロールバーを表示 */
+#panel {
+  background:rgba(20, 30, 40, 0.6);
+  backdrop-filter:blur(8px);
+  border-radius:14px;
+  padding:10px;
+  overflow-y: auto; /* 常に縦スクロール可 */
+  overflow-x: hidden;
+  box-shadow:0 10px 30px rgba(0,0,0,0.45);
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+  scrollbar-gutter: stable;
+}
+
+/* 全体スクロールバーのデザイン */
+#panel::-webkit-scrollbar { width:10px; }
+#panel::-webkit-scrollbar-thumb { background:rgba(255,255,255,0.18); border-radius:8px; }
+#panel::-webkit-scrollbar-track { background:rgba(255,255,255,0.06); border-radius:8px; }
+
+/* 各セクション内のスクロールも維持 */
+.section .content { max-height:240px; overflow-y: auto; padding-right:6px; }
+.section .content::-webkit-scrollbar { width:8px; }
+.section .content::-webkit-scrollbar-thumb { background:rgba(255,255,255,0.2); border-radius:4px; }
+.section .content::-webkit-scrollbar-track { background:rgba(255,255,255,0.05); }
+.section summary::-webkit-details-marker{display:none}
+.section summary::before{ content:"📌"; margin-right:6px; }
+.section .content{ padding:10px 12px; display:grid; gap:10px; max-height:240px; overflow-y:auto; padding-right:6px; }
+.section .content::-webkit-scrollbar{width:8px}
+.section .content::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.2);border-radius:4px}
+.section .content::-webkit-scrollbar-track{background:rgba(255,255,255,0.05)}
+
+.twoCol{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media (max-width:520px){ .twoCol{grid-template-columns:1fr} }
+
+/* HUD */
+.hud{position:absolute;left:14px;top:14px;background:rgba(0,0,0,0.6);padding:8px 10px;border-radius:10px;color:#d2e6f0;z-index:1200}
+.badge{position:absolute;right:14px;top:14px;background:rgba(0,0,0,0.6);padding:8px 10px;border-radius:10px;color:#d2e6f0;z-index:1200}
+.version{position:fixed;left:12px;bottom:12px;color:var(--muted);font-size:12px;z-index:1500}
+
+/* Station/Epic Icons */
+.station-dot{display:flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:999px;background:#57c7ff;color:#061015;font-weight:800;font-size:12px;border:2px solid rgba(0,0,0,0.2);box-shadow:0 2px 10px rgba(0,0,0,0.25)}
+.station-label{position:absolute;top:-18px;white-space:nowrap;background:rgba(0,0,0,0.6);color:#fff;padding:2px 6px;border-radius:6px;font-size:11px}
+.countdown-pill{position:absolute;top:22px;white-space:nowrap;background:rgba(0,0,0,0.6);color:#fff;padding:2px 6px;border-radius:6px;font-size:11px}
+.epi-dot{width:18px;height:18px;border-radius:999px;background:#ff6b6b;border:2px solid #d74f4f;box-shadow:0 2px 10px rgba(0,0,0,0.25)}
+
+/* Overlay */
+#overlay{position:fixed;inset:0;display:none;align-items:center;justify-content:center;z-index:5000}
+#obg{position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,0.55),rgba(0,0,0,0.85));backdrop-filter:blur(2px)}
+#op{position:relative;z-index:2;background:linear-gradient(180deg,#172026,#0e1417);padding:20px;border-radius:12px;border:1px solid rgba(255,255,255,0.06);width:min(820px,94vw);color:#fff}
+#op h3{margin:0 0 8px 0;color:#ffcc66}
+</style>
+</head>
+<body>
+
+<!-- ===== Title & Tutorial ===== -->
+<div id="title">
+  <div id="titleCard">
+    <div id="tLeft">
+      <h1>地震シミュレーター vβ</h1>
+      <div id="titleMap">
+        <svg viewBox="0 0 1600 1200" width="100%" height="100%" xmlns="http://www.w3.org/2000/svg">
+          <rect width="100%" height="100%" fill="#ffffff"/>
+          <path d="M980 140l40 40-20 60 40 60-10 60 50 50-30 70 60 40-30 80 40 70-60 20-50-20-40 30-70-10-40 30-60-10-60-50-70-10-50-40-40-60-30-80 20-70 40-60 60-40 90-20 80-30 70-10 60-10z" fill="#dfe8ef" stroke="#333" stroke-width="2"/>
+          <text x="16" y="28" font-size="18" fill="#333">Japan (embedded)</text>
+        </svg>
+      </div>
+      <div class="titleBtns">
+        <button id="btnStart" class="primary">開始</button>
+        <button id="btnTutorial" class="ghost">チュートリアル</button>
+        <button id="btnAIMode" class="ghost">AI推論モード</button>
+      </div>
+      <small>スマホ：ダブルタップ=観測点、2本指=ズーム、1本指ドラッグ=パン（ビューモード推奨）。</small>
+    </div>
+
+    <div id="tRight">
+      <div class="slide" data-s="0">
+        <h3>1/3 はじめに</h3>
+        <p class="small">ツール：震源（最大5）/観測点（青）を追加編集。ビュー：編集無効・ズーム/パンのみ。S到達で震度バッジ表示。</p>
+        <div class="slideNav">
+          <div class="small" id="slideIndex">スライド 1 / 3</div>
+          <div>
+            <button id="prevSlide" class="ghost" disabled>前へ</button>
+            <button id="nextSlide" class="ghost">次へ</button>
+          </div>
+        </div>
+      </div>
+      <div class="slide" data-s="1" style="display:none">
+        <h3>2/3 追加方法</h3>
+        <p class="small">地図クリック=震源、<b>ダブルタップ/ダブルクリック=観測点</b>。観測点は青丸。名前はクリックで編集。</p>
+        <div class="slideNav">
+          <div class="small">スライド 2 / 3</div>
+          <div>
+            <button class="ghost" id="prev2">前へ</button>
+            <button class="ghost" id="next2">次へ</button>
+          </div>
+        </div>
+      </div>
+      <div class="slide" data-s="2" style="display:none">
+        <h3>3/3 地図と物理</h3>
+        <p class="small">P/S速度や距離減衰 d を調整。地図透明度スライダで背景を薄くできます。</p>
+        <div class="slideNav">
+          <div class="small">スライド 3 / 3</div>
+          <div>
+            <button class="ghost" id="prev3">前へ</button>
+            <button class="primary" id="startFromSlide">開始</button>
+          </div>
+        </div>
+      </div>
+      <small>AI推論は別チュートリアルに切替（外部API拡張ポイントあり）。</small>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Main App ===== -->
+<div id="app">
+  <div class="layout">
+    <div id="mapWrap">
+      <div id="map"></div>
+      <div class="hud" id="hud">ツール: クリック=震源 / ダブルタップ=観測点 / ドラッグ=移動</div>
+      <div class="badge" id="modeBadge">Mode: TOOL</div>
+    </div>
+
+    <aside id="panel">
+      <!-- シミュ -->
+      <details class="section" open>
+        <summary>シミュレーション / モード</summary>
+        <div class="content">
+          <div class="twoCol">
+            <button id="runStart" class="primary">Start</button>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button id="runPause" class="ghost" disabled>Pause</button>
+              <button id="runResume" class="ghost" disabled>Resume</button>
+              <button id="runStop" class="ghost" disabled>Stop</button>
+            </div>
+          </div>
+          <div class="twoCol">
+            <div>
+              <label>モード</label>
+              <select id="modeSel">
+                <option value="TOOL">ツール</option>
+                <option value="VIEW">ビュー</option>
+                <option value="AI">AI推論</option>
+              </select>
+            </div>
+            <div>
+              <label>再生速度</label>
+              <input id="speed" type="range" min="0.25" max="4" step="0.05" value="1">
+            </div>
+          </div>
+          <small>開始時は自動でビューへ（編集無効／ズーム&パンのみ）。</small>
+        </div>
+      </details>
+
+      <!-- サウンド & 読み上げ -->
+      <details class="section" open>
+        <summary>サウンド / 読み上げ</summary>
+        <div class="content">
+          <div class="twoCol">
+            <div>
+              <label>ミュート</label>
+              <select id="muteSel">
+                <option value="off">Off</option>
+                <option value="on">On</option>
+              </select>
+            </div>
+            <div>
+              <label>音量</label>
+              <input id="vol" type="range" min="0" max="1" step="0.01" value="0.35">
+            </div>
+          </div>
+          <div class="twoCol">
+            <div>
+              <label>TTS（予想震度の読み上げ）</label>
+              <select id="ttsMode">
+                <option value="off">オフ</option>
+                <option value="all">全て読み上げ</option>
+                <option value="major">主要都市のみ</option>
+                <option value="jma5">5弱以上のみ</option>
+              </select>
+            </div>
+            <div>
+              <label>話速</label>
+              <input id="ttsRate" type="range" min="0.7" max="1.3" step="0.05" value="1.0">
+            </div>
+          </div>
+        </div>
+      </details>
+
+      <!-- 震源 -->
+      <details class="section" open>
+        <summary>震源（最大5）</summary>
+        <div class="content">
+          <div class="twoCol">
+            <div><label>M</label><input id="inMag" type="number" step="0.1" min="-2" max="12" value="6.5"></div>
+            <div><label>深さ(km)</label><input id="inDepth" type="number" step="0.1" min="0.1" max="750" value="30"></div>
+          </div>
+          <button id="btnAddEpic" class="primary">地図中心に震源追加</button>
+          <div id="epicList" class="small" style="color:var(--muted)">震源なし</div>
+        </div>
+      </details>
+
+      <!-- 観測点 -->
+      <details class="section" open>
+        <summary>観測点（青丸）</summary>
+        <div class="content">
+          <div class="twoCol">
+            <div><label>名前</label><input id="stName" type="text" placeholder="例: 東京"></div>
+            <div class="twoCol" style="grid-template-columns:1fr 1fr">
+              <div><label>緯度</label><input id="stLat" type="number" step="0.0001" placeholder="35.68"></div>
+              <div><label>経度</label><input id="stLon" type="number" step="0.0001" placeholder="139.76"></div>
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button id="btnAddStation" class="primary">地図中心に追加</button>
+            <button id="btnClearStations" class="ghost">全削除</button>
+          </div>
+          <div id="stList" class="small" style="color:var(--muted)">観測点なし</div>
+        </div>
+      </details>
+
+      <!-- 地図/表示 -->
+      <details class="section">
+        <summary>地図 / 表示</summary>
+        <div class="content">
+          <div class="twoCol">
+            <div>
+              <label>ベースマップ</label>
+              <select id="tileSel">
+                <option value="osm">OSM 標準</option>
+                <option value="bright">Carto Bright</option>
+                <option value="toner">Stamen Toner</option>
+              </select>
+            </div>
+            <div>
+              <label>地図透明度</label>
+              <input id="tileOpacity" type="range" min="0.2" max="1" step="0.02" value="1">
+            </div>
+          </div>
+          <div class="twoCol">
+            <div>
+              <label>P/Sリング</label>
+              <select id="ringVis">
+                <option value="on">表示</option>
+                <option value="off">非表示</option>
+              </select>
+            </div>
+            <div>
+              <label>HUD表示</label>
+              <select id="hudVis">
+                <option value="on">表示</option>
+                <option value="off">非表示</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </details>
+
+      <!-- 物理スケール -->
+      <details class="section">
+        <summary>物理スケール / 推定</summary>
+        <div class="content">
+          <div class="twoCol">
+            <div><label>P波速度 Vp (km/s)</label><input id="vp" type="number" step="0.1" value="6.0"></div>
+            <div><label>S波速度 Vs (km/s)</label><input id="vs" type="number" step="0.1" value="3.5"></div>
+          </div>
+          <div class="twoCol">
+            <div>
+              <label>距離減衰 d (1/km)</label>
+              <input id="att" type="range" min="0" max="0.008" step="0.0001" value="0.0035">
+              <small>log10PGA ≈ a+bM−c·log10R − d·R（R:斜距離km）</small>
+            </div>
+            <div>
+              <label>減衰プリセット</label>
+              <select id="modelPreset">
+                <option value="default" selected>デフォルト</option>
+                <option value="dStrong">遠距離強め（d=0.005）</option>
+                <option value="dLight">遠距離弱め（d=0.002）</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </details>
+
+      <!-- 津波（簡易） -->
+      <details class="section" open>
+        <summary>津波（簡易）</summary>
+        <div class="content">
+          <div class="twoCol">
+            <div>
+              <label>津波シミュレーション</label>
+              <select id="tsuMode">
+                <option value="off" selected>オフ</option>
+                <option value="on">オン</option>
+              </select>
+            </div>
+            <div>
+              <label>津波リング</label>
+              <select id="tsuRingVis">
+                <option value="on">表示</option>
+                <option value="off" selected>非表示</option>
+              </select>
+            </div>
+          </div>
+          <div class="twoCol">
+            <div>
+              <label>平均水深 h (m)</label>
+              <input id="seaDepth" type="number" step="10" min="100" max="11000" value="4000">
+            </div>
+            <div>
+              <label>津波速度 c (km/s)</label>
+              <input id="tsuSpeed" type="number" step="0.001" min="0.05" max="0.40" value="0.198" />
+              <small>c ≈ √(g·h)/1000（初期値は h=4000m 相当）</small>
+            </div>
+          </div>
+          <small>※簡易：震源からの水平距離 ÷ c を津波到達時刻 T として算出。減衰・屈折・湾効果などは未考慮。</small>
+        </div>
+      </details>
+
+      <!-- AI推論 -->
+      <details class="section">
+        <summary>AI推論（API連携）</summary>
+        <div class="content">
+          <label>API URL</label>
+          <input id="aiUrl" type="url" placeholder="https://example.com/quake-ai">
+          <label>API Key（必要なら）</label>
+          <input id="aiKey" type="password" placeholder="任意">
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button id="aiFetch" class="primary">AIデータ取得</button>
+            <button id="aiDemo" class="ghost">デモ生成</button>
+            <button id="aiClear" class="ghost">AI適用をクリア</button>
+          </div>
+          <small>期待JSON: {"epicenters":[{"lat":35.5,"lng":140.1,"M":6.8,"depth":30}], "stations":[{"name":"Tokyo","lat":35.68,"lng":139.76}]}</small>
+        </div>
+      </details>
+       <!-- プリセット / 保存・共有 -->
+<details class="section" open>
+  <summary>プリセット / 保存・共有</summary>
+  <div class="content">
+    <div class="twoCol">
+      <div>
+        <label>シナリオプリセット</label>
+        <select id="presetScenario">
+          <option value="none" selected>選択してください</option>
+          <option value="nankai">南海トラフ（M8.2 / h=20km）</option>
+          <option value="sagami">相模トラフ（M7.6 / h=30km）</option>
+          <option value="japantrench">日本海溝（M8.5 / h=25km）</option>
+        </select>
+      </div>
+      <div style="display:flex;gap:8px;align-items:flex-end">
+        <button id="applyPreset" class="primary">適用</button>
+        <button id="clearAll" class="ghost">全消去</button>
+      </div>
+    </div>
+
+    <div class="twoCol">
+      <div>
+        <label>状態を保存（ブラウザ）</label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button id="saveLocal" class="ghost">保存</button>
+          <button id="loadLocal" class="ghost">読込</button>
+          <button id="delLocal" class="ghost">削除</button>
+        </div>
+      </div>
+      <div>
+        <label>ファイル</label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button id="exportJson" class="ghost">エクスポート</button>
+          <label class="ghost" style="padding:8px 12px;cursor:pointer">
+            インポート<input id="importJson" type="file" accept="application/json" style="display:none">
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <div class="twoCol">
+      <div>
+        <label>共有URL</label>
+        <button id="copyPermalink" class="ghost">URLをコピー</button>
+      </div>
+      <div>
+        <label>ヒートマップ</label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <select id="heatToggle">
+            <option value="off" selected>オフ</option>
+            <option value="on">オン</option>
+          </select>
+          <input id="heatOpacity" type="range" min="0.1" max="1" step="0.05" value="0.5">
+        </div>
+      </div>
+    </div>
+    <small>保存はブラウザ（localStorage）に「quakeSimState」として記録。共有URLは状態を圧縮せずそのまま埋め込みます（長くなることがあります）。</small>
+  </div>
+</details>
+
+      <!-- タイムライン -->
+      <details class="section">
+        <summary>到達タイムライン（予測）</summary>
+        <div class="content" id="timeline">開始すると直近到達順に表示</div>
+      </details>
+    </aside>
+  </div>
+</div>
+
+<!-- Overlay -->
+<div id="overlay" aria-hidden="true">
+  <div id="obg"></div>
+  <div id="op">
+    <h3 id="ovTitle">通知</h3>
+    <p id="ovMsg">メッセージ</p>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
+      <button id="ovOk" class="primary">OK</button>
+      <button id="ovClose" class="ghost">閉じる</button>
+    </div>
+  </div>
+</div>
+
+<div class="version">vβ</div>
+
+<script>
+(()=>{'use strict';
+/* ===== DOM ===== */
+const $=id=>document.getElementById(id);
+const titleView=$('title'), app=$('app');
+const btnStart=$('btnStart'), btnTutorial=$('btnTutorial'), btnAIMode=$('btnAIMode');
+const slideEls=[...document.querySelectorAll('#tRight .slide')];
+const slideIndex=$('slideIndex'), prevSlide=$('prevSlide'), nextSlide=$('nextSlide');
+const prev2=$('prev2'), next2=$('next2'), prev3=$('prev3'), startFromSlide=$('startFromSlide');
+
+const mapEl=$('map');
+const runStart=$('runStart'), runPause=$('runPause'), runResume=$('runResume'), runStop=$('runStop');
+const modeSel=$('modeSel'), speedIn=$('speed');
+const inMag=$('inMag'), inDepth=$('inDepth'), btnAddEpic=$('btnAddEpic'), epicList=$('epicList');
+const stName=$('stName'), stLat=$('stLat'), stLon=$('stLon'), btnAddStation=$('btnAddStation'), btnClearStations=$('btnClearStations'), stList=$('stList');
+const tileSel=$('tileSel'), tileOpacity=$('tileOpacity'), ringVis=$('ringVis'), hudVis=$('hudVis');
+const vpIn=$('vp'), vsIn=$('vs'), attIn=$('att'), presetSel=$('modelPreset');
+const hud=$('hud'), modeBadge=$('modeBadge'), timeline=$('timeline');
+const overlay=$('overlay'), ovTitle=$('ovTitle'), ovMsg=$('ovMsg'), ovOk=$('ovOk'), ovClose=$('ovClose');
+const muteSel=$('muteSel'), volIn=$('vol');
+const ttsModeSel=$('ttsMode'), ttsRate=$('ttsRate');
+const aiUrl=$('aiUrl'), aiKey=$('aiKey'), aiFetch=$('aiFetch'), aiDemo=$('aiDemo'), aiClear=$('aiClear');
+
+/* 津波 DOM */
+const tsuModeSel = $('tsuMode'), tsuRingVis = $('tsuRingVis');
+const seaDepthIn = $('seaDepth'), tsuSpeedIn = $('tsuSpeed');
+
+/* プリセット/保存/共有/ヒートマップ DOM */
+const presetScenario=$('presetScenario'), applyPreset=$('applyPreset'), clearAll=$('clearAll');
+const saveLocal=$('saveLocal'), loadLocal=$('loadLocal'), delLocal=$('delLocal');
+const exportJson=$('exportJson'), importJson=$('importJson'), copyPermalink=$('copyPermalink');
+const heatToggle=$('heatToggle'), heatOpacity=$('heatOpacity');
+
+/* Overlay */
+function showOverlay(t,m,ok){ ovTitle.textContent=t; ovMsg.textContent=m; overlay.style.display='flex'; ovOk.onclick=()=>{ if(ok) ok(); hideOverlay(); }; ovClose.onclick=hideOverlay; }
+function hideOverlay(){ overlay.style.display='none'; }
+
+/* ===== Tutorial nav ===== */
+let sIdx=0;
+function showSlide(i){
+  sIdx=Math.max(0,Math.min(2,i));
+  slideEls.forEach((el,idx)=> el.style.display = (idx===sIdx)?'block':'none');
+  slideIndex.textContent=`スライド ${sIdx+1} / 3`;
+  prevSlide.disabled = (sIdx===0);
+  nextSlide.disabled = (sIdx===2);
+}
+prevSlide.addEventListener('click', ()=>showSlide(sIdx-1));
+nextSlide.addEventListener('click', ()=>showSlide(sIdx+1));
+prev2.addEventListener('click', ()=>showSlide(0));
+next2.addEventListener('click', ()=>showSlide(2));
+prev3.addEventListener('click', ()=>showSlide(1));
+startFromSlide?.addEventListener('click', startApp);
+showSlide(0);
+
+/* ===== Title actions ===== */
+btnStart.addEventListener('click', startApp);
+btnTutorial.addEventListener('click', ()=> showOverlay('チュートリアル','右側の「前へ／次へ」で1/3→3/3を移動できます。'));
+btnAIMode.addEventListener('click', ()=> showOverlay('AI推論モード','右パネル「AI推論（API連携）」から取得できます。'));
+
+/* ===== App State ===== */
+let map, tiles=null;
+let epicenters=[]; // {id, lat, lng, M, depth, marker, pCircle, sCircle, tCircle?}
+let stations=[];   // {id, lat, lng, name, marker, nameMarker?, countdownMarker, pA, sA, tA, pred, isMajor, spoken}
+let running=false, t0=null, tOffset=0, speed=1, vp=6.0, vs=3.5, dAtt=0.0035, ringsOn=true;
+let lastTimelineUpdate=0;
+
+/* 津波 */
+let tsunamiOn = false;
+let tsuRingsOn = false;
+let cT = 0.198; // km/s（h≈4000mから算出）
+
+/* ヒートマップ（簡易） */
+let heatLayer = L.layerGroup(); // stationごとに半透明の円を載せる
+
+/* ===== Audio ===== */
+let audioCtx=null, masterGain=null;
+function ensureAudio(){
+  if(audioCtx) return;
+  audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+  masterGain = audioCtx.createGain();
+  masterGain.gain.value = parseFloat(volIn.value)||0.35;
+  masterGain.connect(audioCtx.destination);
+}
+function setVolume(v){ if(masterGain) masterGain.gain.value = v; }
+function isMuted(){ return muteSel.value==='on'; }
+function beep(freq=880, dur=0.12, type='sine', vol=0.5){
+  if(isMuted()) return;
+  ensureAudio();
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.type = type; o.frequency.value=freq;
+  g.gain.value = (parseFloat(volIn.value)||0.35)*vol;
+  o.connect(g); g.connect(masterGain);
+  const t = audioCtx.currentTime;
+  o.start(t);
+  g.gain.setValueAtTime(g.gain.value, t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t+dur);
+  o.stop(t+dur+0.02);
+}
+function eewChime(){
+  if(isMuted()) return;
+  ensureAudio();
+  const seq = [{f:660,d:0.18},{f:880,d:0.22},{f:660,d:0.18},{f:880,d:0.22}];
+  let t = audioCtx.currentTime;
+  seq.forEach(s=>{
+    const o=audioCtx.createOscillator(), g=audioCtx.createGain();
+    o.type='triangle'; o.frequency.value=s.f;
+    g.gain.value=(parseFloat(volIn.value)||0.35)*0.5;
+    o.connect(g); g.connect(masterGain);
+    o.start(t); g.gain.setValueAtTime(g.gain.value,t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t+s.d);
+    o.stop(t+s.d+0.02);
+    t += s.d*1.05;
+  });
+}
+
+/* ===== TTS ===== */
+function ttsEnabled(){ return ttsModeSel.value!=='off' && 'speechSynthesis' in window; }
+function shouldSpeak(st, idx){
+  const mode = ttsModeSel.value;
+  if(mode==='off') return false;
+  if(mode==='all') return true;
+  if(mode==='major') return !!st.isMajor;
+  if(mode==='jma5') return idx>=4;
+  return false;
+}
+function speakJP(text){
+  if(!ttsEnabled()) return;
+  try{
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = 'ja-JP';
+    u.rate = parseFloat(ttsRate.value)||1.0;
+    window.speechSynthesis.speak(u);
+  }catch(e){}
+}
+
+/* ===== Start App / Map ===== */
+function startApp(){
+  const tdiv=document.getElementById('title');
+  tdiv.style.transition='opacity .25s'; tdiv.style.opacity='0';
+  setTimeout(()=>{ tdiv.style.display='none'; app.style.display='block'; initMap(); },260);
+}
+function initMap(){
+  map = L.map('map', { zoomControl:true, minZoom:4, maxZoom:12, preferCanvas:true, doubleClickZoom:false });
+  setTiles(tileSel.value); tiles.setOpacity(parseFloat(tileOpacity.value)||1);
+  map.setView([36.2048, 138.2529], 5);
+
+  map.on('click', (e)=>{ if(getMode()!=='TOOL') return; addEpicAt(e.latlng.lat,e.latlng.lng); });
+  map.on('dblclick', (e)=>{ if(getMode()!=='TOOL') return; addStationAt(e.latlng.lat,e.latlng.lng, stName.value.trim()||`観測点${stations.length+1}`, true, false); });
+
+  heatLayer.addTo(map);
+  preloadStations();
+}
+
+/* ===== Base tiles ===== */
+function setTiles(kind){
+  if(tiles) map.removeLayer(tiles);
+  if(kind==='bright'){
+    tiles = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',{attribution:'©OpenStreetMap ©Carto',maxZoom:19});
+  }else if(kind==='toner'){
+    tiles = L.tileLayer('https://stamen-tiles.a.ssl.fastly.net/toner/{z}/{x}/{y}.png',{attribution:'Map tiles by Stamen, ©OpenStreetMap',maxZoom:20});
+  }else{
+    tiles = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'©OpenStreetMap contributors',maxZoom:19});
+  }
+  tiles.addTo(map);
+}
+
+/* ===== Modes & HUD ===== */
+function getMode(){ return modeSel.value; }
+function setModeUI(){
+  const m=getMode();
+  modeBadge.textContent=`Mode: ${m}`;
+  hud.textContent = m==='TOOL' ? 'ツール: クリック=震源 / ダブルタップ=観測点 / ドラッグ=移動'
+               : m==='VIEW' ? 'ビュー: 編集無効（ズーム/パンのみ）' : 'AI: API取得で自動設定（右パネル）';
+  const disable = (m==='VIEW' && running);
+  [inMag,inDepth,btnAddEpic,btnAddStation,btnClearStations,stName,stLat,stLon].forEach(el=> el.disabled=disable);
+}
+modeSel.addEventListener('change', ()=>{
+  setModeUI();
+  if(getMode()==='AI'){ showOverlay('AI推論モード','右パネル「AI推論」でAPIを設定して取得できます。'); }
+});
+hudVis.addEventListener('change', ()=> {
+  const on = (hudVis.value==='on');
+  document.querySelectorAll('.hud,.badge').forEach(el=> el.style.display = on?'block':'none');
+});
+
+/* ===== Add Epic/Station ===== */
+function clampMag(x){ return Math.max(-2, Math.min(12, isNaN(x)?6.5:x)); }
+function clampDepth(x){ return Math.max(0.1, Math.min(750, isNaN(x)?30:x)); }
+
+function addEpicAt(lat,lng){
+  if(epicenters.length>=5){ showOverlay('上限','震源は最大5つまで。'); return; }
+  const M = clampMag(parseFloat(inMag.value));
+  const depth = clampDepth(parseFloat(inDepth.value));
+  const el = document.createElement('div'); el.className='epi-dot';
+  const marker = L.marker([lat,lng], { draggable:true, icon: L.divIcon({html:el, className:'', iconSize:[18,18]}) }).addTo(map);
+  marker.bindTooltip(`M${M.toFixed(1)} / ${depth.toFixed(1)}km`,{direction:'top',offset:[0,-16]});
+  const epi={ id:'e'+Date.now()+Math.random(), lat,lng, M, depth, marker, pCircle:null, sCircle:null, tCircle:null };
+  marker.on('dragend', ()=>{ const ll=marker.getLatLng(); epi.lat=ll.lat; epi.lng=ll.lng; computePredictions(); });
+  marker.on('click', ()=>{ if(getMode()==='TOOL'){ const nm=parseFloat(prompt('M?',epi.M)); const dp=parseFloat(prompt('深さ(km)?',epi.depth)); if(!isNaN(nm)) epi.M=clampMag(nm); if(!isNaN(dp)) epi.depth=clampDepth(dp); marker.closeTooltip(); marker.bindTooltip(`M${epi.M.toFixed(1)} / ${epi.depth.toFixed(1)}km`); computePredictions(); }});
+  epicenters.push(epi);
+  refreshEpicList(); computePredictions();
+}
+
+function stationIconHTML(text=''){ return `<div class="station-dot">${text||''}</div>`; }
+function makeNameIconHTML(name){ return `<div class="station-label">${name}</div>`; }
+function makeCountdownHTML(txt){ return `<div class="countdown-pill">${txt}</div>`; }
+
+function addStationAt(lat,lng,name, showLabel=true, isMajor=false){
+  const icon = L.divIcon({ html: stationIconHTML(''), className:'', iconSize:[34,34] });
+  const marker = L.marker([lat,lng],{ draggable:true, icon }).addTo(map);
+  let nameMarker=null;
+  if(showLabel && name){
+    nameMarker = L.marker([lat,lng],{ icon: L.divIcon({ html: makeNameIconHTML(name), className:'', iconSize:null }), interactive:false }).addTo(map);
+  }
+  const countdown = L.marker([lat,lng],{ icon:L.divIcon({html:makeCountdownHTML(''),className:'',iconSize:null}), interactive:false }).addTo(map);
+
+  const st={ id:'s'+Date.now()+Math.random(), lat,lng, name, marker, nameMarker, countdownMarker:countdown, pA:false, sA:false, tA:false, pred:null, isMajor, spoken:false };
+  marker.on('drag', ()=>{ const ll=marker.getLatLng(); st.lat=ll.lat; st.lng=ll.lng; if(nameMarker) nameMarker.setLatLng(ll); countdown.setLatLng(ll); });
+  marker.on('dragend', ()=>{ computePredictions(); });
+  marker.on('click', ()=>{ if(getMode()==='TOOL'){ const nm=prompt('観測点名', st.name||''); if(nm!==null){ st.name=nm.trim(); if(st.name){ if(!nameMarker){ nameMarker = L.marker([lat,lng],{ icon: L.divIcon({ html: makeNameIconHTML(st.name), className:'', iconSize:null }), interactive:false }).addTo(map); st.nameMarker=nameMarker; } else { nameMarker.setIcon(L.divIcon({html:makeNameIconHTML(st.name),className:'',iconSize:null})); } } else if(nameMarker){ map.removeLayer(nameMarker); st.nameMarker=null; } refreshStList(); } }});
+  stations.push(st);
+  refreshStList(); computePredictions();
+}
+
+/* 初期配置 */
+function preloadStations(){
+  const major = [
+    {name:'札幌',lat:43.0618,lng:141.3545},{name:'仙台',lat:38.2688,lng:140.8721},
+    {name:'東京',lat:35.6812,lng:139.7671},{name:'横浜',lat:35.4437,lng:139.6380},
+    {name:'千葉',lat:35.6073,lng:140.1063},{name:'さいたま',lat:35.8617,lng:139.6455},
+    {name:'川崎',lat:35.5300,lng:139.7036},{name:'静岡',lat:34.9710,lng:138.3889},
+    {name:'名古屋',lat:35.1815,lng:136.9066},{name:'京都',lat:35.0116,lng:135.7681},
+    {name:'大阪',lat:34.6937,lng:135.5023},{name:'神戸',lat:34.6901,lng:135.1955},
+    {name:'広島',lat:34.3853,lng:132.4553},{name:'岡山',lat:34.6551,lng:133.9195},
+    {name:'福岡',lat:33.5902,lng:130.4017},{name:'北九州',lat:33.8830,lng:130.8753},
+    {name:'熊本',lat:32.8031,lng:130.7079},
+  ];
+  major.forEach(c=> addStationAt(c.lat,c.lng,c.name,true,true));
+  const extra = [
+    {lat:41.7687,lng:140.7288},{lat:40.8220,lng:140.7473},{lat:39.7199,lng:140.1024},
+    {lat:37.9161,lng:139.0364},{lat:36.5613,lng:136.6562},{lat:36.6513,lng:138.1809},
+    {lat:35.4233,lng:136.7607},{lat:34.6851,lng:135.8327},{lat:34.2260,lng:135.1675},
+    {lat:33.8416,lng:132.7661},{lat:33.5597,lng:133.5311},{lat:34.0703,lng:134.5548},
+    {lat:35.5039,lng:134.2377},{lat:35.4723,lng:133.0505},{lat:33.2396,lng:131.6093},
+    {lat:31.9077,lng:131.4202},{lat:31.5966,lng:130.5571},{lat:26.2125,lng:127.6811},
+  ];
+  extra.forEach(p=> addStationAt(p.lat,p.lng,'', false, false));
+}
+
+/* ===== Lists ===== */
+function refreshEpicList(){
+  epicList.innerHTML='';
+  if(epicenters.length===0){ epicList.textContent='震源なし'; return; }
+  epicenters.forEach((e)=>{
+    const row=document.createElement('div'); row.style.display='flex'; row.style.justifyContent='space-between'; row.style.alignItems='center'; row.style.margin='4px 0';
+    const left=document.createElement('div'); left.innerHTML=`<b>M${e.M.toFixed(1)}</b> / ${e.depth.toFixed(1)}km @ ${e.lat.toFixed(2)},${e.lng.toFixed(2)}`;
+    const right=document.createElement('div');
+    const del=document.createElement('button'); del.className='ghost'; del.textContent='削除';
+    del.onclick=()=>{ if(e.pCircle) map.removeLayer(e.pCircle); if(e.sCircle) map.removeLayer(e.sCircle); if(e.tCircle) map.removeLayer(e.tCircle); map.removeLayer(e.marker); epicenters=epicenters.filter(x=>x.id!==e.id); computePredictions(); refreshEpicList(); };
+    right.appendChild(del); row.appendChild(left); row.appendChild(right); epicList.appendChild(row);
+  });
+}
+function refreshStList(){
+  stList.innerHTML='';
+  if(stations.length===0){ stList.textContent='観測点なし'; return; }
+  stations.forEach((s)=>{
+    const nm = s.name && s.name.trim() ? s.name : '(名称なし)';
+    const row=document.createElement('div'); row.style.display='flex'; row.style.justifyContent='space-between'; row.style.alignItems='center'; row.style.margin='4px 0';
+    const left=document.createElement('div'); left.innerHTML=`<b>${nm}</b> <span class="small">@${s.lat.toFixed(3)},${s.lng.toFixed(3)}</span>` + (s.pred?` <span class="small">/ 予測:${s.pred.jma.sh} P:${s.pred.arrP.toFixed(1)}s S:${s.pred.arrS.toFixed(1)}s${(isFinite(s.pred.arrT)?` T:${s.pred.arrT.toFixed(1)}s`:'')}</span>`:'');
+    const right=document.createElement('div');
+    const del=document.createElement('button'); del.className='ghost'; del.textContent='削除';
+    del.onclick=()=>{ map.removeLayer(s.marker); if(s.nameMarker) map.removeLayer(s.nameMarker); map.removeLayer(s.countdownMarker); stations=stations.filter(x=>x.id!==s.id); refreshStList(); computePredictions(); };
+    right.appendChild(del); row.appendChild(left); row.appendChild(right); stList.appendChild(row);
+  });
+}
+
+/* ===== Tiles, HUD, opacity – イベント（重複はここだけ） ===== */
+tileSel.addEventListener('change', ()=> setTiles(tileSel.value));
+tileOpacity.addEventListener('input', ()=> { if(tiles) tiles.setOpacity(parseFloat(tileOpacity.value)||1); });
+ringVis.addEventListener('change', ()=>{ ringsOn = (ringVis.value==='on'); updateRingVisibility(); });
+muteSel.addEventListener('change', ()=>{ if(!isMuted()) ensureAudio(); });
+volIn.addEventListener('input', ()=> setVolume(parseFloat(volIn.value)||0.35));
+
+/* ===== Simulation control ===== */
+runStart.addEventListener('click', ()=>{
+  if(epicenters.length===0){ showOverlay('震源未設定','まず震源を追加してください。'); return; }
+  vp = parseFloat(vpIn.value)||6.0; vs=parseFloat(vsIn.value)||3.5; dAtt=parseFloat(attIn.value)||0.0035;
+  running=true; t0=performance.now(); tOffset=0; speed=parseFloat(speedIn.value)||1;
+  modeSel.value='VIEW'; setModeUI();
+  setupCircles();
+  runStart.disabled=true; runStop.disabled=false; runPause.disabled=false; runResume.disabled=true;
+});
+runPause.addEventListener('click', ()=>{ if(!running) return; tOffset = getElapsed(); running=false; runPause.disabled=true; runResume.disabled=false; });
+runResume.addEventListener('click', ()=>{ if(running) return; t0=performance.now(); running=true; runPause.disabled=false; runResume.disabled=true; });
+runStop.addEventListener('click', stopSim);
+
+presetSel.addEventListener('change', ()=>{
+  if(presetSel.value==='dStrong') attIn.value = 0.005;
+  else if(presetSel.value==='dLight') attIn.value = 0.002;
+  else attIn.value = 0.0035;
+  dAtt=parseFloat(attIn.value)||0.0035; computePredictions();
+});
+vpIn.addEventListener('change', ()=>{ vp=parseFloat(vpIn.value)||6.0; computePredictions(); });
+vsIn.addEventListener('change', ()=>{ vs=parseFloat(vsIn.value)||3.5; computePredictions(); });
+attIn.addEventListener('input', ()=>{ dAtt=parseFloat(attIn.value)||0.0035; computePredictions(); });
+
+function stopSim(){
+  running=false; t0=null; tOffset=0;
+  epicenters.forEach(e=>{ if(e.pCircle) map.removeLayer(e.pCircle); if(e.sCircle) map.removeLayer(e.sCircle); if(e.tCircle) map.removeLayer(e.tCircle); e.pCircle=null; e.sCircle=null; e.tCircle=null; });
+  stations.forEach(s=>{ s.pA=false; s.sA=false; s.tA=false; s.spoken=false; updateStationBadge(s,''); updateCountdown(s,''); });
+  if('speechSynthesis' in window) window.speechSynthesis.cancel();
+  runStart.disabled=false; runStop.disabled=true; runPause.disabled=true; runResume.disabled=true;
+  timeline.innerHTML='停止中。Startで再開できます。';
+}
+
+function getElapsed(){ if(!running) return tOffset; if(!t0) return tOffset; return tOffset + (performance.now()-t0)/1000*speed; }
+
+/* ===== Physics / Prediction ===== */
+function hav(lat1,lng1,lat2,lng2){ const R=6371e3; const toRad=Math.PI/180; const dLat=(lat2-lat1)*toRad, dLng=(lng2-lng1)*toRad; const a=Math.sin(dLat/2)**2 + Math.cos(lat1*toRad)*Math.cos(lat2*toRad)*Math.sin(dLng/2)**2; return 2*R*Math.asin(Math.sqrt(a)); }
+function arrivals(epi, st){
+  const h = hav(epi.lat, epi.lng, st.lat, st.lng)/1000;
+  const R = Math.sqrt(h*h + epi.depth*epi.depth);
+  return { tP:R/vp, tS:R/vs, Rkm:R, Hkm:h };
+}
+function estimatePGA(M, Rkm){
+  const a=-1.2, b=0.45, c=1.1, d=dAtt;
+  const lg = a + b*M - c*Math.log10(Math.max(1, Rkm)) - d*Rkm;
+  return Math.pow(10, lg);
+}
+function pgaToJMA(pga){
+  if(pga>1.0) return {sh:'7', idx:8};
+  if(pga>0.6) return {sh:'6強', idx:7};
+  if(pga>0.3) return {sh:'6弱', idx:6};
+  if(pga>0.15) return {sh:'5強', idx:5};
+  if(pga>0.06) return {sh:'5弱', idx:4};
+  if(pga>0.025) return {sh:'4', idx:3};
+  if(pga>0.01) return {sh:'3', idx:2};
+  if(pga>0.003) return {sh:'2', idx:1};
+  return {sh:'1', idx:0};
+}
+function colorForIdx(i){
+  const pal=["#9ebed6","#7fc9c9","#6de0a8","#f7e86b","#ffd27a","#ffb06b","#ff8a5f","#ff5a5a","#c83b3b"];
+  return pal[Math.max(0,Math.min(pal.length-1,i))];
+}
+
+/* 津波 */
+function depthToSpeedKmPerS(h_m){ return Math.sqrt(9.81 * Math.max(100, h_m)) / 1000; } // √(g·h)/1000
+
+function computePredictions(){
+  stations.forEach(s=>{
+    let best=null;
+    epicenters.forEach(e=>{
+      const at=arrivals(e,s);
+      const pga=estimatePGA(e.M, Math.max(0.5, at.Rkm));
+      const jma=pgaToJMA(pga);
+      const pred={arrP:at.tP, arrS:at.tS, pga, jma, color:colorForIdx(jma.idx)};
+      if(!best || pred.jma.idx>best.jma.idx) best=pred;
+    });
+
+    if(best){
+      let minH = Infinity;
+      epicenters.forEach(e=>{
+        const h = hav(e.lat, e.lng, s.lat, s.lng)/1000; // km
+        if(h<minH) minH = h;
+      });
+      best.arrT = (tsunamiOn && isFinite(minH) && cT>0) ? (minH / cT) : Infinity;
+    }
+
+    s.pred=best; s.pA=false; s.sA=false; s.tA=false; s.spoken=false;
+    updateStationBadge(s,''); updateCountdown(s,'');
+  });
+  updateHeatLayer();
+  updateTimeline();
+}
+
+/* ===== P/S/T Rings ===== */
+function setupCircles(){
+  epicenters.forEach(e=>{
+    if(e.pCircle) map.removeLayer(e.pCircle);
+    if(e.sCircle) map.removeLayer(e.sCircle);
+    if(e.tCircle) map.removeLayer(e.tCircle);
+    e.pCircle = L.circle([e.lat,e.lng],{radius:0,color:'rgba(80,170,255,0.5)', weight:2, fill:false});
+    e.sCircle = L.circle([e.lat,e.lng],{radius:0,color:'rgba(255,100,100,0.4)', weight:2, fill:false});
+    e.tCircle = L.circle([e.lat,e.lng],{radius:0,color:'rgba(80,255,200,0.45)', weight:2, fill:false});
+    if(ringsOn){ e.pCircle.addTo(map); e.sCircle.addTo(map); }
+    if(tsuRingsOn && tsunamiOn){ e.tCircle.addTo(map); }
+  });
+}
+function updateRingVisibility(){
+  epicenters.forEach(e=>{
+    if(e.pCircle){
+      if(ringsOn){ e.pCircle.addTo(map); } else { map.removeLayer(e.pCircle); }
+    }
+    if(e.sCircle){
+      if(ringsOn){ e.sCircle.addTo(map); } else { map.removeLayer(e.sCircle); }
+    }
+    if(e.tCircle){
+      if(tsuRingsOn && tsunamiOn){ e.tCircle.addTo(map); } else { map.removeLayer(e.tCircle); }
+    }
+  });
+}
+
+/* ===== Station UI ===== */
+function updateStationBadge(st, text){
+  st.marker.setIcon( L.divIcon({ html: stationIconHTML(text), className:'', iconSize:[34,34] }) );
+}
+function updateCountdown(st, txt){
+  if(!st.countdownMarker) return;
+  st.countdownMarker.setIcon( L.divIcon({html:makeCountdownHTML(txt||''),className:'',iconSize:null}) );
+}
+
+/* ===== Timeline ===== */
+function updateTimeline(){
+  if(!running){ timeline.innerHTML='停止中。Startで再開できます。'; return; }
+  const t=getElapsed();
+  const rows=[];
+  stations.forEach(s=>{
+    if(!s.pred) return;
+    if(!s.pA) rows.push({name:s.name||'(無名)', type:'P', in: Math.max(0, s.pred.arrP - t)});
+    if(!s.sA) rows.push({name:s.name||'(無名)', type:'S', in: Math.max(0, s.pred.arrS - t)});
+    if(tsunamiOn && !s.tA && isFinite(s.pred.arrT)) rows.push({name:s.name||'(無名)', type:'T', in: Math.max(0, s.pred.arrT - t)});
+  });
+  rows.sort((a,b)=>a.in-b.in);
+  const html = rows.slice(0,16).map(r=>`<div>${r.in.toFixed(1)}s → <b>${r.type}</b> @ ${r.name}</div>`).join('') || '全て到達済み';
+  timeline.innerHTML = html;
+}
+
+/* ===== Loop ===== */
+function loop(){
+  if(running){
+    const t=getElapsed();
+    epicenters.forEach(e=>{
+      const rP=Math.max(0, t*vp*1000);
+      const rS=Math.max(0, t*vs*1000);
+      if(e.pCircle) e.pCircle.setRadius(rP);
+      if(e.sCircle) e.sCircle.setRadius(rS);
+      const rT=Math.max(0, t*cT*1000); // km/s * s -> km -> m
+      if(e.tCircle) e.tCircle.setRadius(rT);
+    });
+    stations.forEach(s=>{
+      if(!s.pred) return;
+
+      if(!s.pA){
+        const left = s.pred.arrP - t;
+        updateCountdown(s, left>0 ? `P ${left.toFixed(1)}s` : '');
+        if(left<=0 && !s.pA){ s.pA=true; beep(900,0.08,'sine',0.35); }
+      }else if(!s.sA){
+        const left = s.pred.arrS - t;
+        updateCountdown(s, left>0 ? `S ${left.toFixed(1)}s` : '');
+        if(left<=0 && !s.sA){
+          s.sA=true;
+          updateCountdown(s,'');
+          updateStationBadge(s, s.pred.jma.sh);
+          if(s.pred.jma.idx>=4) eewChime(); else beep(640,0.12,'square',0.4);
+          if(!s.spoken && shouldSpeak(s, s.pred.jma.idx)){
+            const nm = s.name && s.name.trim() ? s.name : '観測点';
+            speakJP(`${nm}、予想震度、${s.pred.jma.sh}`);
+            s.spoken=true;
+          }
+        }
+      }
+
+      if(tsunamiOn && !s.tA && isFinite(s.pred.arrT)){
+        const leftT = s.pred.arrT - t;
+        if(leftT<=0){
+          s.tA = true;
+          if(!s.sA) updateStationBadge(s, '🌊');
+          beep(520, 0.18, 'sine', 0.5);
+        }
+      }
+
+      const leftP = s.pA ? Infinity : (s.pred.arrP - t);
+      const leftS = s.sA ? Infinity : (s.pred.arrS - t);
+      const leftT = (!tsunamiOn || s.tA || !isFinite(s.pred.arrT)) ? Infinity : (s.pred.arrT - t);
+      const minLeft = Math.min(leftP, leftS, leftT);
+      if(isFinite(minLeft)){
+        const label = (minLeft===leftP) ? `P ${Math.max(0,leftP).toFixed(1)}s`
+                     : (minLeft===leftS) ? `S ${Math.max(0,leftS).toFixed(1)}s`
+                     : `T ${Math.max(0,leftT).toFixed(1)}s`;
+        updateCountdown(s, label);
+      }else{
+        updateCountdown(s,'');
+      }
+    });
+    const now=performance.now();
+    if(now-lastTimelineUpdate>250){ updateTimeline(); lastTimelineUpdate=now; }
+  }
+  requestAnimationFrame(loop);
+}
+
+/* ===== Manual add buttons ===== */
+btnAddEpic.addEventListener('click', ()=>{ const c=map.getCenter(); addEpicAt(c.lat,c.lng); });
+btnAddStation.addEventListener('click', ()=>{
+  let name = stName.value.trim();
+  let lat = parseFloat(stLat.value);
+  let lng = parseFloat(stLon.value);
+  if(!isFinite(lat) || !isFinite(lng)){ const c = map.getCenter(); lat = c.lat; lng = c.lng; }
+  addStationAt(lat, lng, name || `観測点${stations.length+1}`, true, false);
+  if(name) stName.value = '';
+});
+btnClearStations.addEventListener('click', ()=>{
+  stations.forEach(s=>{ if(s.marker) map.removeLayer(s.marker); if(s.nameMarker) map.removeLayer(s.nameMarker); if(s.countdownMarker) map.removeLayer(s.countdownMarker); });
+  stations = [];
+  refreshStList();
+  timeline.innerHTML = '観測点を全削除しました。';
+  computePredictions();
+});
+
+/* ===== 速度スライダ ===== */
+speedIn.addEventListener('input', ()=>{ speed = parseFloat(speedIn.value) || 1; });
+
+/* ===== 津波コントロール ===== */
+function ensureTsunamiCircles(){
+  epicenters.forEach(e=>{
+    if(!e.tCircle){
+      e.tCircle = L.circle([e.lat,e.lng],{ radius:0, color:'rgba(80,255,200,0.45)', weight:2, fill:false });
+      if(tsuRingsOn && tsunamiOn) e.tCircle.addTo(map);
+    }
+  });
+}
+
+tsuModeSel.addEventListener('change', ()=>{
+  tsunamiOn = (tsuModeSel.value === 'on');
+  if(tsunamiOn){
+    cT = parseFloat(tsuSpeedIn.value) || cT;
+    ensureTsunamiCircles();
+  }
+  updateRingVisibility();
+  computePredictions();
+  updateTimeline();
+});
+
+tsuRingVis.addEventListener('change', ()=>{
+  tsuRingsOn = (tsuRingVis.value === 'on');
+  if(tsuRingsOn && tsunamiOn) ensureTsunamiCircles();
+  updateRingVisibility();
+});
+
+seaDepthIn.addEventListener('change', ()=>{
+  const h = Math.max(100, parseFloat(seaDepthIn.value) || 4000);
+  cT = depthToSpeedKmPerS(h);
+  tsuSpeedIn.value = cT.toFixed(3);
+  computePredictions();
+});
+
+tsuSpeedIn.addEventListener('change', ()=>{
+  const v = parseFloat(tsuSpeedIn.value);
+  if(isFinite(v) && v>0){
+    cT = Math.max(0.01, Math.min(0.8, v));
+    computePredictions();
+  }
+});
+
+/* ===== ヒートマップ（簡易） ===== */
+function updateHeatLayer(){
+  heatLayer.clearLayers();
+  if(heatToggle.value!=='on') return;
+  const opacity = parseFloat(heatOpacity.value)||0.5;
+  stations.forEach(s=>{
+    if(!s.pred) return;
+    const idx = s.pred.jma.idx; // 0..8
+    const r = 12000 + idx*6000; // 半径（m）少し強調
+    const col = s.pred.color || '#ff5a5a';
+    const c = L.circle([s.lat,s.lng],{
+      radius:r,
+      color:col,
+      weight:1,
+      fill:true,
+      fillOpacity:opacity*0.35,
+      opacity:opacity*0.85
+    });
+    heatLayer.addLayer(c);
+  });
+}
+heatToggle.addEventListener('change', updateHeatLayer);
+heatOpacity.addEventListener('input', updateHeatLayer);
+
+/* ===== プリセット / 保存・共有 ===== */
+applyPreset.addEventListener('click', ()=>{
+  const v = presetScenario.value;
+  if(v==='none'){ showOverlay('プリセット','シナリオを選択してください。'); return; }
+  // 全消去
+  epicenters.forEach(e=>{ if(e.marker) map.removeLayer(e.marker); });
+  epicenters=[]; refreshEpicList();
+  // 代表値（概略）
+  let preset;
+  if(v==='nankai'){ preset = {lat:33.0, lng:137.5, M:8.2, depth:20}; }
+  if(v==='sagami'){ preset = {lat:34.8, lng:139.2, M:7.6, depth:30}; }
+  if(v==='japantrench'){ preset = {lat:38.5, lng:143.0, M:8.5, depth:25}; }
+  inMag.value = preset.M; inDepth.value = preset.depth;
+  addEpicAt(preset.lat, preset.lng);
+  computePredictions();
+  showOverlay('プリセット適用', '震源を設定しました。必要に応じて観測点を編集してください。');
+});
+clearAll.addEventListener('click', ()=>{
+  // 震源
+  epicenters.forEach(e=>{ if(e.marker) map.removeLayer(e.marker); if(e.pCircle) map.removeLayer(e.pCircle); if(e.sCircle) map.removeLayer(e.sCircle); if(e.tCircle) map.removeLayer(e.tCircle); });
+  epicenters=[]; refreshEpicList();
+  // 観測点
+  stations.forEach(s=>{ if(s.marker) map.removeLayer(s.marker); if(s.nameMarker) map.removeLayer(s.nameMarker); if(s.countdownMarker) map.removeLayer(s.countdownMarker); });
+  stations=[]; refreshStList();
+  // リング/ヒート
+  heatLayer.clearLayers();
+  computePredictions();
+  showOverlay('全消去','震源と観測点をすべて削除しました。');
+});
+
+const LS_KEY='quakeSimState';
+function serializeState(){
+  return {
+    params:{ vp:parseFloat(vpIn.value)||6, vs:parseFloat(vsIn.value)||3.5, att:parseFloat(attIn.value)||0.0035, tsunamiOn, tsuRingsOn, cT, sea:parseFloat(seaDepthIn.value)||4000 },
+    epicenters: epicenters.map(e=>({lat:e.lat,lng:e.lng,M:e.M,depth:e.depth})),
+    stations: stations.map(s=>({lat:s.lat,lng:s.lng,name:s.name||'',isMajor:!!s.isMajor}))
+  };
+}
+function restoreState(obj){
+  // clear current
+  epicenters.forEach(e=>{ if(e.marker) map.removeLayer(e.marker); if(e.pCircle) map.removeLayer(e.pCircle); if(e.sCircle) map.removeLayer(e.sCircle); if(e.tCircle) map.removeLayer(e.tCircle); });
+  epicenters=[]; refreshEpicList();
+  stations.forEach(s=>{ if(s.marker) map.removeLayer(s.marker); if(s.nameMarker) map.removeLayer(s.nameMarker); if(s.countdownMarker) map.removeLayer(s.countdownMarker); });
+  stations=[]; refreshStList();
+
+  if(obj?.params){
+    vpIn.value = obj.params.vp ?? 6; vsIn.value = obj.params.vs ?? 3.5; attIn.value = obj.params.att ?? 0.0035;
+    seaDepthIn.value = obj.params.sea ?? 4000; cT = obj.params.cT ?? depthToSpeedKmPerS(parseFloat(seaDepthIn.value));
+    tsuModeSel.value = obj.params.tsunamiOn ? 'on' : 'off';
+    tsuRingVis.value = obj.params.tsuRingsOn ? 'on' : 'off';
+    tsunamiOn = !!obj.params.tsunamiOn; tsuRingsOn = !!obj.params.tsuRingsOn;
+  }
+  (obj?.epicenters||[]).forEach(e=>{ inMag.value=e.M; inDepth.value=e.depth; addEpicAt(e.lat,e.lng); });
+  (obj?.stations||[]).forEach(s=> addStationAt(s.lat,s.lng,s.name||'',true,!!s.isMajor));
+
+  fitToAll();
+  computePredictions();
+}
+function fitToAll(){
+  const pts = [];
+  epicenters.forEach(e=> pts.push([e.lat, e.lng]));
+  stations.forEach(s=> pts.push([s.lat, s.lng]));
+  if(pts.length){
+    const b = L.latLngBounds(pts);
+    map.fitBounds(b.pad(0.2));
+  }
+}
+
+saveLocal.addEventListener('click', ()=>{ try{ localStorage.setItem(LS_KEY, JSON.stringify(serializeState())); showOverlay('保存','ブラウザに保存しました。'); }catch(e){ showOverlay('保存失敗', String(e?.message||e)); } });
+loadLocal.addEventListener('click', ()=>{ try{ const raw=localStorage.getItem(LS_KEY); if(!raw) return showOverlay('読込','保存データがありません。'); restoreState(JSON.parse(raw)); showOverlay('読込','保存データを読み込みました。'); }catch(e){ showOverlay('読込失敗', String(e?.message||e)); } });
+delLocal.addEventListener('click', ()=>{ localStorage.removeItem(LS_KEY); showOverlay('削除','保存データを削除しました。'); });
+
+exportJson.addEventListener('click', ()=>{
+  const data = JSON.stringify(serializeState(), null, 2);
+  const blob = new Blob([data], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href=url; a.download='quakeSimState.json'; a.click();
+  URL.revokeObjectURL(url);
+});
+importJson.addEventListener('change', async (ev)=>{
+  const f = ev.target.files?.[0]; if(!f) return;
+  try{
+    const text = await f.text();
+    const obj = JSON.parse(text);
+    restoreState(obj);
+    showOverlay('インポート','ファイルを読み込みました。');
+  }catch(e){ showOverlay('インポート失敗', String(e?.message||e)); }
+  importJson.value = '';
+});
+copyPermalink.addEventListener('click', async ()=>{
+  try{
+    const payload = encodeURIComponent(JSON.stringify(serializeState()));
+    const url = location.origin + location.pathname + '#state=' + payload;
+    await navigator.clipboard.writeText(url);
+    showOverlay('共有URL','クリップボードにコピーしました。');
+  }catch(e){ showOverlay('コピー失敗', String(e?.message||e)); }
+});
+// 起動時にハッシュから復元
+window.addEventListener('load', ()=>{
+  const m = location.hash.match(/#state=(.+)$/);
+  if(m){ try{ const obj = JSON.parse(decodeURIComponent(m[1])); // initMap後に実行されるよう少し遅延
+    setTimeout(()=> restoreState(obj), 400);
+  }catch{} }
+});
+
+/* ===== AI 連携 ===== */
+function applyAI(data){
+  try{
+    let addedE = 0, addedS = 0;
+    if(Array.isArray(data.epicenters)){
+      data.epicenters.forEach(ep=>{
+        if(!isFinite(ep.lat) || !isFinite(ep.lng)) return;
+        addEpicAt(ep.lat, ep.lng);
+        const e = epicenters[epicenters.length-1];
+        if(e){
+          if(isFinite(ep.M)) e.M = clampMag(parseFloat(ep.M));
+          if(isFinite(ep.depth)) e.depth = clampDepth(parseFloat(ep.depth));
+          e.marker.bindTooltip(`M${e.M.toFixed(1)} / ${e.depth.toFixed(1)}km`);
+          e.ai = true;
+          addedE++;
+        }
+      });
+    }
+    if(Array.isArray(data.stations)){
+      data.stations.forEach(st=>{
+        if(!isFinite(st.lat) || !isFinite(st.lng)) return;
+        addStationAt(st.lat, st.lng, st.name||'', true, !!st.isMajor);
+        const s = stations[stations.length-1];
+        if(s){ s.ai = true; addedS++; }
+      });
+    }
+    computePredictions();
+    fitToAll();
+    showOverlay('AI適用', `震源${addedE}件・観測点${addedS}件を反映しました。`);
+  }catch(err){
+    showOverlay('AI適用エラー', String(err?.message || err || 'unknown'));
+  }
+}
+aiFetch.addEventListener('click', async ()=>{
+  const url = aiUrl.value.trim();
+  if(!url){ showOverlay('URL未入力','API URL を入力してください。'); return; }
+  try{
+    const headers = {};
+    const key = aiKey.value.trim();
+    if(key) headers['Authorization'] = 'Bearer '+key;
+    const res = await fetch(url, { headers });
+    if(!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    applyAI(data);
+  }catch(err){
+    showOverlay('取得失敗', `AIデータの取得に失敗: ${err.message || err}`);
+  }
+});
+aiDemo.addEventListener('click', ()=>{
+  const demo = {
+    epicenters: [{ lat:33.0, lng:137.5, M:7.3, depth:20 }],
+    stations: [
+      { name:'高知', lat:33.5597, lng:133.5311 },
+      { name:'和歌山', lat:34.2305, lng:135.1708 },
+      { name:'名古屋', lat:35.1815, lng:136.9066, isMajor:true }
+    ]
+  };
+  applyAI(demo);
+});
+aiClear.addEventListener('click', ()=>{
+  let removedE = 0, removedS = 0;
+  epicenters = epicenters.filter(e=>{
+    if(e.ai){
+      if(e.marker) map.removeLayer(e.marker);
+      if(e.pCircle) map.removeLayer(e.pCircle);
+      if(e.sCircle) map.removeLayer(e.sCircle);
+      if(e.tCircle) map.removeLayer(e.tCircle);
+      removedE++; return false;
+    }
+    return true;
+  });
+  stations = stations.filter(s=>{
+    if(s.ai){
+      if(s.marker) map.removeLayer(s.marker);
+      if(s.nameMarker) map.removeLayer(s.nameMarker);
+      if(s.countdownMarker) map.removeLayer(s.countdownMarker);
+      removedS++; return false;
+    }
+    return true;
+  });
+  refreshEpicList(); refreshStList(); computePredictions();
+  showOverlay('AI適用をクリア', `AI追加の震源${removedE}件・観測点${removedS}件を削除しました。`);
+});
+
+/* ===== 仕上げ：ループ開始 ===== */
+loop();
+
+})(); // IIFE ここまで
+
+</script>
+</body>
+</html>
