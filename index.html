@@ -660,6 +660,13 @@ body[data-theme="light"] .section .content::-webkit-scrollbar-track{ background:
             <button id="btnAddEpic" class="primary" type="button">地図中心に震源追加</button>
             <div id="epicList" class="small" style="color:var(--muted)">震源なし</div>
           </div>
+<!-- 震源検索 UI -->
+<div class="epi-search">
+  <input id="epiSearch" type="search" placeholder="震源名で検索（例：岩手県沖, 東京湾, 日向灘）" list="epiRegions">
+  <datalist id="epiRegions"></datalist>
+  <button id="epiSearchBtn" type="button">追加</button>
+</div>
+
         </details>
 
         <!-- 観測点 -->
@@ -1246,7 +1253,7 @@ body[data-theme="light"] .section .content::-webkit-scrollbar-track{ background:
   let epicenters = []; // {id,lat,lng,M,depth,marker,pCircle,sCircle,tCircle,_moved,region}
   let stations = [];   // {id,lat,lng,name,marker,nameMarker,countdownMarker,pA,sA,tA,pred,isMajor,spoken,_moved,_lastBadge,_lastCountLabel,visible}
   let running = false, t0 = null, tOffset = 0, speed = 1;
-  let vp = 6.0, vs = 3.5, dAtt = 0.002; // 既定d=0.002（遠距離弱め）
+  let vp = 6.0, vs = 3.5, dAtt = 0.0041; // 既定d=0.0041（遠距離弱め）
   let ringsOn = true;
 
   // Tsunami
@@ -1355,9 +1362,9 @@ body[data-theme="light"] .section .content::-webkit-scrollbar-track{ background:
   const SPEC_MIN = {
     title: '必要スペック',
     rows: [
-      ['OS', 'Windows 10 / macOS 11 / iOS 15 / Android 11'],
+      ['OS', 'Windows 10 / macOS 11 / iOS 16 / Android 11'],
       ['CPU', 'デュアルコア 2GHz 以上'],
-      ['RAM', '4GB 以上'],
+      ['RAM', '8GB 以上'],
       ['GPU', '内蔵でも可（WebGL1有効）'],
       ['ブラウザ', 'Chrome/Edge/Firefox/Safari（直近2版）'],
       ['ネット', '常時接続（地図タイル取得）']
@@ -1366,9 +1373,9 @@ body[data-theme="light"] .section .content::-webkit-scrollbar-track{ background:
   const SPEC_REC = {
     title: '推奨スペック',
     rows: [
-      ['OS', 'Windows 11 / macOS 13+ / iOS 17+ / Android 13+'],
+      ['OS', 'Windows 11 / macOS 13+ / iOS 18+ / Android 13+'],
       ['CPU', '4コア 3GHz 級'],
-      ['RAM', '8GB 以上'],
+      ['RAM', '16GB 以上'],
       ['GPU', 'ミドルクラス（WebGL2対応）'],
       ['ブラウザ', '最新安定版（ハードウェアアクセラレータON）'],
       ['ネット', '光回線相当']
@@ -1396,83 +1403,154 @@ body[data-theme="light"] .section .content::-webkit-scrollbar-track{ background:
   })();
   themeSel?.addEventListener('change', () => applyTheme(themeSel.value));
 
-  /* ------------------------------------------------------------
-   * Audio / TTS（GitHub Pages対策：ユーザー操作後に有効化）
-   * ---------------------------------------------------------- */
-  function ensureAudio() {
-    if (audioCtx) return;
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    masterGain = audioCtx.createGain();
-    masterGain.gain.value = parseFloat(volIn?.value || settingsVol?.value || 0.35);
-    masterGain.connect(audioCtx.destination);
-  }
-  function setVolume(v) { if (masterGain) masterGain.gain.value = v; }
+/* ------------------------------------------------------------
+ * Audio / TTS（堅牢・キュー化：ユーザー操作後に確実に複数発声）
+ * ---------------------------------------------------------- */
+function ensureAudio() {
+  if (audioCtx) return;
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  masterGain = audioCtx.createGain();
+  masterGain.gain.value = parseFloat(volIn?.value || settingsVol?.value || 0.35);
+  masterGain.connect(audioCtx.destination);
+}
+function setVolume(v) { if (masterGain) masterGain.gain.value = v; }
 
-  function unlockByUserGesture() {
-    if (userActivated) return;
-    userActivated = true;
-    try { ensureAudio(); audioCtx.resume?.(); } catch {}
-    // iOS Safari で voices が遅れることがある
+let voicesReady = false;
+function loadVoices() {
+  try {
+    const vs = window.speechSynthesis?.getVoices() || [];
+    if (vs.length > 0) {
+      ttsVoices = vs;
+      voicesReady = true;
+    }
+  } catch {}
+}
+// voices が遅延する環境向け：簡易待機
+async function waitVoices(maxWaitMs = 1200, intervalMs = 60) {
+  const start = performance.now();
+  while (performance.now() - start < maxWaitMs) {
     loadVoices();
+    if (voicesReady) return true;
+    await new Promise(r => setTimeout(r, intervalMs));
   }
-  window.addEventListener('pointerdown', unlockByUserGesture, { once: false, passive: true });
-  window.addEventListener('keydown', unlockByUserGesture, { once: false });
+  return true; // 0件でも再生は可能
+}
 
-  function loadVoices() {
-    try {
-      const vs = window.speechSynthesis?.getVoices() || [];
-      if (vs.length > 0) ttsVoices = vs;
-    } catch {}
-  }
+function unlockByUserGesture() {
+  if (userActivated) return;
+  userActivated = true;
+  try { ensureAudio(); audioCtx.resume?.(); } catch {}
+  loadVoices();
   if ('speechSynthesis' in window) {
     window.speechSynthesis.onvoiceschanged = () => {
       ttsVoices = window.speechSynthesis.getVoices();
+      voicesReady = ttsVoices.length > 0;
     };
   }
-  voiceSel?.addEventListener('change', () => {
-    selectedVoiceName = voiceSel.value;
-  });
+}
+window.addEventListener('pointerdown', unlockByUserGesture, { once: false, passive: true });
+window.addEventListener('keydown', unlockByUserGesture, { once: false });
 
-  function pickJapaneseVoice() {
-    const vs = ttsVoices;
-    if (!vs || vs.length === 0) return null;
-    if (selectedVoiceName && selectedVoiceName !== 'auto') {
-      const byName = vs.find(v => v.name === selectedVoiceName);
-      if (byName) return byName;
-    }
-    // 日本語優先
-    const ja = vs.filter(v => (v.lang || '').toLowerCase().startsWith('ja'));
-    // Google系や高品質を優先
-    const pref = ['Google 日本語', 'Kyoko', 'Otoya', 'Microsoft', 'Siri'];
-    for (const p of pref) {
-      const m = ja.find(v => (v.name || '').includes(p));
-      if (m) return m;
-    }
-    return ja[0] || vs[0];
+voiceSel?.addEventListener('change', () => { selectedVoiceName = voiceSel.value; });
+function pickJapaneseVoice() {
+  const vs = ttsVoices;
+  if (!vs || vs.length === 0) return null;
+  if (selectedVoiceName && selectedVoiceName !== 'auto') {
+    const byName = vs.find(v => v.name === selectedVoiceName);
+    if (byName) return byName;
   }
+  const ja = vs.filter(v => (v.lang || '').toLowerCase().startsWith('ja'));
+  const pref = ['Google 日本語', 'Kyoko', 'Otoya', 'Microsoft', 'Siri'];
+  for (const p of pref) {
+    const m = ja.find(v => (v.name || '').includes(p));
+    if (m) return m;
+  }
+  return ja[0] || vs[0] || null;
+}
 
-  function isMuted() { return muteSel?.value === 'on'; }
-  function ttsEnabled() { return ttsModeSel?.value !== 'off' && 'speechSynthesis' in window; }
+function isMuted() { return muteSel?.value === 'on'; }
+function ttsEnabled() { return ttsModeSel?.value !== 'off' && 'speechSynthesis' in window; }
 
-  function speakJP(text) {
-    if (!userActivated) return; // 自動再生対策：必ずユーザー操作後
-    if (isMuted() || !ttsEnabled()) return;
-    try {
-      const u = new SpeechSynthesisUtterance(text);
+// 画面上の音量スライダ連動（WebAudioゲイン）
+volIn?.addEventListener('input', () => setVolume(parseFloat(volIn.value || '0.35')));
+settingsVol?.addEventListener('input', () => setVolume(parseFloat(settingsVol.value || '0.35')));
+
+// TTSテストボタン
+btnTtsTest?.addEventListener('click', async () => {
+  unlockByUserGesture();
+  speakJP('これはQuakeShimXの音声テストです。');
+});
+
+// ---- TTS queue state ----
+let ttsWarmed = false;
+let ttsQueue = [];
+let ttsRunning = false;
+
+function getTtsVolume() {
+  const v = parseFloat(volIn?.value || settingsVol?.value || 0.35);
+  return Math.max(0, Math.min(1, isFinite(v) ? v : 0.35));
+}
+
+// 初回の無音対策：極短の空白を一度だけ再生
+async function ttsWarmOnce() {
+  if (ttsWarmed) return;
+  await waitVoices(1200, 60);
+  try { window.speechSynthesis.resume?.(); } catch {}
+  const warm = new SpeechSynthesisUtterance(' ');
+  warm.lang = 'ja-JP';
+  warm.volume = getTtsVolume();
+  const v = pickJapaneseVoice();
+  if (v) warm.voice = v;
+  await new Promise(res => { warm.onend = res; warm.onerror = res; window.speechSynthesis.speak(warm); });
+  ttsWarmed = true;
+}
+
+// キュー実行ループ：順番に確実に読み上げ
+async function runTtsQueue() {
+  if (ttsRunning) return;
+  ttsRunning = true;
+  try {
+    await ttsWarmOnce();
+    while (ttsQueue.length) {
+      const item = ttsQueue.shift();
+      const u = new SpeechSynthesisUtterance(item.text);
       u.lang = 'ja-JP';
+      u.rate = parseFloat(ttsRate?.value || 1.0);
+      u.volume = getTtsVolume();
       const v = pickJapaneseVoice();
       if (v) u.voice = v;
-      u.rate = parseFloat(ttsRate?.value || 1.0);
-      window.speechSynthesis.speak(u);
-    } catch {}
-  }
 
-  volIn?.addEventListener('input', () => setVolume(parseFloat(volIn.value || '0.35')));
-  settingsVol?.addEventListener('input', () => setVolume(parseFloat(settingsVol.value || '0.35')));
-  btnTtsTest?.addEventListener('click', () => {
-    unlockByUserGesture();
-    speakJP('テストです。');
-  });
+      // Safari/Chrome 安定化：直前 cancel/resume
+      try { window.speechSynthesis.cancel(); } catch {}
+      try { window.speechSynthesis.resume?.(); } catch {}
+
+      await new Promise(resolve => {
+        u.onend = resolve;
+        u.onerror = resolve;
+        window.speechSynthesis.speak(u);
+      });
+    }
+  } finally {
+    ttsRunning = false;
+  }
+}
+
+// 公開API：読み上げ要求（opts.flush で今の内容を破棄して即読みに切替）
+function speakJP(text, opts = {}) {
+  if (!userActivated) return;
+  if (!ttsEnabled() || isMuted()) return;
+
+  const s = String(text || '').trim();
+  if (!s) return;
+
+  if (opts.flush) {
+    try { window.speechSynthesis.cancel(); } catch {}
+    ttsQueue = [{ text: s }];
+  } else {
+    ttsQueue.push({ text: s });
+  }
+  if (!ttsRunning) runTtsQueue();
+}
 
   /* ------------------------------------------------------------
    * Map Initialize（Leaflet）
@@ -1623,169 +1701,270 @@ body[data-theme="light"] .section .content::-webkit-scrollbar-track{ background:
   clearLog?.addEventListener('click', () => { alertLog.textContent = 'まだログがありません。'; });
 
   /* ------------------------------------------------------------
-   * Station Canvas Overlay（軽量化：すべてのモードで有効）
-   * ---------------------------------------------------------- */
-  function ensureCanvasOverlay() {
-    if (overlayCanvas) return;
-    overlayCanvas = document.createElement('canvas');
-    overlayCanvas.id = 'stationsCanvas';
-    Object.assign(overlayCanvas.style, {
-      position: 'absolute', left: '0', top: '0', width: '100%', height: '100%',
-      pointerEvents: 'none', zIndex: 1099
-    });
-    const wrap = document.getElementById('mapWrap') || document.body;
-    wrap.appendChild(overlayCanvas);
-    overlayCtx = overlayCanvas.getContext('2d', { alpha: true, desynchronized: true });
-    resizeCanvas();
-    map.on('move zoom moveend zoomend', () => { canvasDirty = true; });
-    window.addEventListener('resize', resizeCanvas);
-  }
-  function resizeCanvas() {
-    if (!overlayCanvas || !map) return;
-    const size = map.getSize();
-    overlayCanvas.width = Math.floor(size.x * DPR);
-    overlayCanvas.height = Math.floor(size.y * DPR);
-    overlayCtx.setTransform(DPR, 0, 0, DPR, 0, 0);
-    canvasDirty = true;
-  }
-  function enableCanvasStations(enable) {
-    if (enable && !canvasEnabled) {
-      ensureCanvasOverlay();
-      stations.forEach(s => {
-        if (s.visible) {
-          if (map.hasLayer(s.marker)) map.removeLayer(s.marker);
-          if (s.countdownMarker && map.hasLayer(s.countdownMarker)) map.removeLayer(s.countdownMarker);
-          if (s.nameMarker && map.hasLayer(s.nameMarker)) map.removeLayer(s.nameMarker);
-        }
-      });
-      canvasEnabled = true; canvasDirty = true;
-    } else if (!enable && canvasEnabled) {
-      stations.forEach(s => {
-        if (s.visible) {
-          if (!map.hasLayer(s.marker)) map.addLayer(s.marker);
-          if (s.countdownMarker && !map.hasLayer(s.countdownMarker)) map.addLayer(s.countdownMarker);
-          if (s.nameMarker && labelToggle?.value === 'on' && !map.hasLayer(s.nameMarker)) map.addLayer(s.nameMarker);
-        }
-      });
-      canvasEnabled = false;
-      if (overlayCanvas) { overlayCanvas.remove(); overlayCanvas = null; overlayCtx = null; }
-    }
-    canvasDirty = true;
-    updateHud?.();
-  }
-  function updateCanvasAutoToggle() {
-    const manyStations = stations.filter(s => s.visible).length > AUTO_CANVAS_THRESHOLD;
-    const shouldCanvas = perfLite || running || manyStations;
-    enableCanvasStations(shouldCanvas);
-  }
-  function drawStationsCanvas() {
-    if (!canvasEnabled || !overlayCtx || !map) return;
-    if (!canvasDirty) return;
-    canvasDirty = false;
-    const ctx = overlayCtx;
-    const size = map.getSize();
-    ctx.clearRect(0, 0, size.x, size.y);
+ * Station Canvas Overlay（軽量化：再生中 or 軽量モードのみ Canvas）
+ * ---------------------------------------------------------- */
+function ensureCanvasOverlay() {
+  if (overlayCanvas) return;
+  overlayCanvas = document.createElement('canvas');
+  overlayCanvas.id = 'stationsCanvas';
+  Object.assign(overlayCanvas.style, {
+    position: 'absolute', left: '0', top: '0', width: '100%', height: '100%',
+    pointerEvents: 'none', zIndex: 1099
+  });
+  const wrap = document.getElementById('mapWrap') || document.body;
+  wrap.appendChild(overlayCanvas);
+  overlayCtx = overlayCanvas.getContext('2d', { alpha: true, desynchronized: true });
+  resizeCanvas();
+  map.on('move zoom moveend zoomend', () => { canvasDirty = true; });
+  window.addEventListener('resize', resizeCanvas);
+}
 
-    const zoom = map.getZoom();
-    const showText = zoom >= 6;
-    const showLabelMajorOnly = true;
-    const nowT = running ? getElapsed() : tOffset;
+function resizeCanvas() {
+  if (!overlayCanvas || !map) return;
+  const size = map.getSize();
+  overlayCanvas.width = Math.floor(size.x * DPR);
+  overlayCanvas.height = Math.floor(size.y * DPR);
+  overlayCtx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  canvasDirty = true;
+}
 
+function enableCanvasStations(enable) {
+  if (enable === canvasEnabled) return; // 余計な切替を回避
+
+  if (enable) {
+    ensureCanvasOverlay();
     stations.forEach(s => {
-      if (!s.visible) return;
-      const p = map.latLngToContainerPoint([s.lat, s.lng]);
-      if (p.x < -40 || p.y < -40 || p.x > size.x + 40 || p.y > size.y + 40) return;
-
-      const fill = s.sA && s.pred ? (s.pred.color || '#ff5a5a') : '#57c7ff';
-      ctx.beginPath(); ctx.arc(p.x, p.y, 9, 0, Math.PI * 2); ctx.fillStyle = fill; ctx.fill();
-
-      if (s._lastBadge) {
-        ctx.fillStyle = '#061015';
-        ctx.font = '700 11px ui-sans-serif, system-ui';
-        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        ctx.fillText(s._lastBadge, p.x, p.y + 0.5);
-      }
-
-      if (showText && (s.isMajor || !showLabelMajorOnly) && s.pred) {
-        let tag = '', left = Infinity;
-        if (!s.pA) { tag = 'P'; left = s.pred.arrP - nowT; }
-        else if (!s.sA) { tag = 'S'; left = s.pred.arrS - nowT; }
-        else if (tsunamiOn && !s.tA && isFinite(s.pred.arrT)) { tag = 'T'; left = s.pred.arrT - nowT; }
-        if (isFinite(left) && left > 0) {
-          const sec = perfLite ? Math.round(left) : Math.max(0, left).toFixed(1);
-          const txt = `${tag} ${sec}s`;
-          ctx.font = '11px ui-sans-serif, system-ui';
-          const w = ctx.measureText(txt).width + 10;
-          ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(p.x - w / 2, p.y + 14, w, 16);
-          ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-          ctx.fillText(txt, p.x, p.y + 15);
-        }
-      }
-
-      if (showText && (s.isMajor || !showLabelMajorOnly) && s.name) {
-        const nm = s.name;
-        ctx.font = '11px ui-sans-serif, system-ui';
-        const w = ctx.measureText(nm).width + 10;
-        ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(p.x - w / 2, p.y - 30, w, 16);
-        ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-        ctx.fillText(nm, p.x, p.y - 29);
+      if (s.visible) {
+        if (map.hasLayer(s.marker)) map.removeLayer(s.marker);
+        if (s.countdownMarker && map.hasLayer(s.countdownMarker)) map.removeLayer(s.countdownMarker);
+        if (s.nameMarker && map.hasLayer(s.nameMarker)) map.removeLayer(s.nameMarker);
       }
     });
+    canvasEnabled = true;
+    canvasDirty = true;
+  } else {
+    stations.forEach(s => {
+      if (s.visible) {
+        if (!map.hasLayer(s.marker)) map.addLayer(s.marker);
+        if (s.countdownMarker && !map.hasLayer(s.countdownMarker)) map.addLayer(s.countdownMarker);
+        if (s.nameMarker && labelToggle?.value === 'on' && !map.hasLayer(s.nameMarker)) map.addLayer(s.nameMarker);
+      }
+    });
+    canvasEnabled = false;
+    if (overlayCanvas) { overlayCanvas.remove(); overlayCanvas = null; overlayCtx = null; }
+  }
+  canvasDirty = true;
+  updateHud?.();
+}
+
+// ★ここだけ変更：観測点数では切り替えず、再生中 or 軽量モードでのみ Canvas
+function updateCanvasAutoToggle() {
+  const shouldCanvas = perfLite || running;
+  enableCanvasStations(shouldCanvas);
+}
+
+function drawStationsCanvas() {
+  if (!canvasEnabled || !overlayCtx || !map) return;
+  if (!canvasDirty) return;
+  canvasDirty = false;
+
+  const ctx = overlayCtx;
+  const size = map.getSize();
+  ctx.clearRect(0, 0, size.x, size.y);
+
+  const zoom = map.getZoom();
+  const showText = zoom >= 6;
+  const showLabelMajorOnly = true;
+  const nowT = running ? getElapsed() : tOffset;
+
+  stations.forEach(s => {
+    if (!s.visible) return;
+    const p = map.latLngToContainerPoint([s.lat, s.lng]);
+    if (p.x < -40 || p.y < -40 || p.x > size.x + 40 || p.y > size.y + 40) return;
+
+    const fill = s.sA && s.pred ? (s.pred.color || '#ff5a5a') : '#57c7ff';
+    ctx.beginPath(); ctx.arc(p.x, p.y, 9, 0, Math.PI * 2);
+    ctx.fillStyle = fill; ctx.fill();
+
+    if (s._lastBadge) {
+      ctx.fillStyle = '#061015';
+      ctx.font = '700 11px ui-sans-serif, system-ui';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(s._lastBadge, p.x, p.y + 0.5);
+    }
+
+    if (showText && (s.isMajor || !showLabelMajorOnly) && s.pred) {
+      let tag = '', left = Infinity;
+      if (!s.pA) { tag = 'P'; left = s.pred.arrP - nowT; }
+      else if (!s.sA) { tag = 'S'; left = s.pred.arrS - nowT; }
+      else if (tsunamiOn && !s.tA && isFinite(s.pred.arrT)) { tag = 'T'; left = s.pred.arrT - nowT; }
+
+      if (isFinite(left) && left > 0) {
+        const sec = perfLite ? Math.round(left) : Math.max(0, left).toFixed(1);
+        const txt = `${tag} ${sec}s`;
+        ctx.font = '11px ui-sans-serif, system-ui';
+        const w = ctx.measureText(txt).width + 10;
+        ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(p.x - w / 2, p.y + 14, w, 16);
+        ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+        ctx.fillText(txt, p.x, p.y + 15);
+      }
+    }
+
+    if (showText && (s.isMajor || !showLabelMajorOnly) && s.name) {
+      const nm = s.name;
+      ctx.font = '11px ui-sans-serif, system-ui';
+      const w = ctx.measureText(nm).width + 10;
+      ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(p.x - w / 2, p.y - 30, w, 16);
+      ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+      ctx.fillText(nm, p.x, p.y - 29);
+    }
+  });
+}
+
+
+/* ------------------------------------------------------------
+ * Physics / Prediction（深発対応・異常震域・後方互換）
+ * ---------------------------------------------------------- */
+function clampMag(x) { return Math.max(-2, Math.min(12, isNaN(x) ? 6.5 : x)); }
+function clampDepth(x) { return Math.max(0.1, Math.min(750, isNaN(x) ? 30 : x)); }
+
+function stationIconHTML(text = '') { return `<div class="station-dot">${text || ''}</div>`; }
+function makeNameIconHTML(name) { return `<div class="station-label">${name}</div>`; }
+function makeCountdownHTML(txt) { return `<div class="countdown-pill">${txt}</div>`; }
+
+function hav(lat1, lng1, lat2, lng2) {
+  const R = 6371e3; const toRad = Math.PI / 180;
+  const dLat = (lat2 - lat1) * toRad, dLng = (lng2 - lng1) * toRad;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * toRad) * Math.cos(lat2 * toRad) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+/* ---------- 震度換算（遠方の有感を拾いやすく） ---------- */
+function pgaToJMA(pga) {
+  if (pga > 1.0) return { sh: '7',   idx: 8 };
+  if (pga > 0.75) return { sh: '6強', idx: 7 };
+  if (pga > 0.45) return { sh: '6弱', idx: 6 };
+  if (pga > 0.15) return { sh: '5強', idx: 5 };
+  if (pga > 0.06) return { sh: '5弱', idx: 4 };
+  if (pga > 0.02) return { sh: '4',   idx: 3 };
+  if (pga > 0.01) return { sh: '3',   idx: 2 };
+  if (pga > 0.003) return { sh: '2',  idx: 1 };
+  if (pga > 0.0005) return { sh: '1', idx: 0 }; // ← 0.001 → 0.0005 に緩和
+  return { sh: '', idx: 0 };
+}
+
+function colorForIdx(i) {
+  const pal = ['#9ebed6', '#7fc9c9', '#6de0a8', '#f7e86b', '#ffd27a', '#ffb06b', '#ff8a5f', '#ff5a5a', '#c83b3b', '#C0C0C0'];
+  return pal[Math.max(0, Math.min(pal.length - 1, i))];
+}
+
+/* ---------- 距離キャッシュ ---------- */
+const H_CACHE = new Map(); // key:`e.id:s.id` -> km
+function getHkmCached(e, s) {
+  const key = `${e.id}:${s.id}`;
+  if (!e._moved && !s._moved && H_CACHE.has(key)) return H_CACHE.get(key);
+  const h = hav(e.lat, e.lng, s.lat, s.lng) / 1000;
+  H_CACHE.set(key, h);
+  return h;
+}
+function markAllUnmoved() { epicenters.forEach(e => e._moved = false); stations.forEach(s => s._moved = false); }
+
+/* ---------- 直近コンテキスト（後方互換のため） ---------- */
+let __LAST_ARR_CTX = null;
+
+/* ---------- P/S到達時刻 ---------- */
+function arrivals(epi, st) {
+  const Hkm = getHkmCached(epi, st);
+  const R = Math.sqrt(Hkm * Hkm + epi.depth * epi.depth);
+  // 後方互換: 直近の震源・観測点情報を保持（estimatePGA が2引数でも深さ/方位を参照できる）
+  __LAST_ARR_CTX = {
+    dep: epi.depth, epiLat: epi.lat, epiLng: epi.lng, stLat: st.lat, stLng: st.lng, Rkm: R
+  };
+  return { tP: R / vp, tS: R / vs, Rkm: R, Hkm };
+}
+
+/* ---------- 方位（度） ---------- */
+function bearingDeg(lat1, lon1, lat2, lon2) {
+  const toRad = Math.PI / 180, toDeg = 180 / Math.PI;
+  const φ1 = lat1 * toRad, φ2 = lat2 * toRad, dλ = (lon2 - lon1) * toRad;
+  const y = Math.sin(dλ) * Math.cos(φ2);
+  const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(dλ);
+  return (Math.atan2(y, x) * toDeg + 360) % 360;
+}
+
+/* ---------- 異常震域ブースト（深発強化版） ---------- */
+function abnormalIntensityBoost(depthKm, epiLat, epiLng, stLat, stLng, Rkm) {
+  const d = clampDepth(depthKm);
+
+  // 深いほどリング中心を外側へ：R0 ≈ 50 + 0.9*depth
+  // 例) depth=670km → R0 ≈ 653+50 ≈ 703km
+  const R0   = 50 + 0.9 * d;
+  const sigR = 260;   // リング幅を広めに
+  const A    = 1.10;  // リング増幅（最大 +110%）
+  const sNear = 120;  // 近距離抑制の広がりを小さめに
+  const D     = 0.25; // 近距離抑制度合い
+  const ring  = 1 + A * Math.exp(-0.5 * ((Rkm - R0) / sigR) ** 2)
+                  - D * Math.exp(-0.5 * (Rkm / sNear) ** 2);
+
+  // 方位ローブ：本州方向をやや広く（±50°）
+  const HONSHU = { lat: 37.5, lng: 138.5 };
+  const azGuide = bearingDeg(epiLat, epiLng, HONSHU.lat, HONSHU.lng);
+  const azToSta = bearingDeg(epiLat, epiLng, stLat, stLng);
+  const dAz   = (Math.abs(azToSta - azGuide) + 540) % 360 - 180;
+  const sigAz = 50;
+  const C     = 0.35;
+  const lobe  = 1 + C * Math.exp(-0.5 * (dAz / sigAz) ** 2);
+
+  // 日本列島～本州弧の「波導」っぽい利得（遠距離域で底上げ）
+  // だいたい 300–1200kmに広く効かせ、中心は ~750km
+  const G = 1 + 0.50 * Math.exp(-0.5 * ((Rkm - 750) / 300) ** 2);
+
+  // 駆動域：日本の緯度経度帯に入っていたら、わずかに底上げ（地盤/盆地の平均化）
+  const inJapanArc = (stLat >= 31 && stLat <= 44 && stLng >= 130 && stLng <= 145) ? 1.10 : 1.00;
+
+  // 係数の上下限をやや広めに（全土で広く揺れる事例を再現）
+  return Math.max(0.7, Math.min(3.0, ring * lobe * G * inJapanArc));
+}
+
+/* ---------- PGA推定（深発対応・異常震域・εフロア強化） ---------- */
+function estimatePGA(M, Rkm, depthKm = null, epiLat = null, epiLng = null, stLat = null, stLng = null) {
+  const ctx = __LAST_ARR_CTX || {};
+  const dep  = clampDepth(depthKm != null ? depthKm : (ctx.dep != null ? ctx.dep : 30));
+  const rkm  = Math.max(1, isFinite(Rkm) ? Rkm : (ctx.Rkm || 50));
+  const eLat = (epiLat != null ? epiLat : ctx.epiLat);
+  const eLng = (epiLng != null ? epiLng : ctx.epiLng);
+  const sLat = (stLat != null ? stLat : ctx.stLat);
+  const sLng = (stLng != null ? stLng : ctx.stLng);
+
+  // 深さでタイプを分ける
+  const type = (dep >= 60) ? 'slab' : (dep >= 20 ? 'interface' : 'crust');
+
+  // 減衰パラメタ（深発はさらに緩く & 深さ項強め）
+  const baseD = Math.max(0, dAtt);
+  const params = {
+    crust:     { a: -1.10, b: 0.45, c: 1.10, h: 10, d: baseD * 1.00, kDepth: -0.0004 },
+    interface: { a: -1.30, b: 0.43, c: 1.15, h: 16, d: baseD * 0.85, kDepth: -0.0001 },
+    slab:      { a: -1.50, b: 0.44, c: 0.95, h: 45, d: Math.max(0.0004, baseD * 0.45), kDepth: +0.0016 }
+    // ↑ slab: 減衰(d)をかなり緩く、深さ係数を強め、hも大きめ
+  };
+  const p = params[type];
+
+  // 有効距離（浅部ハードニング）
+  const Reff = Math.sqrt(rkm * rkm + p.h * p.h);
+
+  // 対数モデル（g）
+  let lg  = p.a + p.b * M - p.c * Math.log10(Reff) - p.d * Reff + p.kDepth * dep;
+  let PGA = Math.pow(10, lg);
+
+  // 深発・超深発での広域利得
+  if (dep >= 250 && isFinite(eLat) && isFinite(eLng) && isFinite(sLat) && isFinite(sLng)) {
+    PGA *= abnormalIntensityBoost(dep, eLat, eLng, sLat, sLng, rkm);
   }
 
-  /* ------------------------------------------------------------
-   * Physics / Prediction
-   * ---------------------------------------------------------- */
-  function clampMag(x) { return Math.max(-2, Math.min(12, isNaN(x) ? 6.5 : x)); }
-  function clampDepth(x) { return Math.max(0.1, Math.min(750, isNaN(x) ? 30 : x)); }
-
-  function stationIconHTML(text = '') { return `<div class="station-dot">${text || ''}</div>`; }
-  function makeNameIconHTML(name) { return `<div class="station-label">${name}</div>`; }
-  function makeCountdownHTML(txt) { return `<div class="countdown-pill">${txt}</div>`; }
-
-  function hav(lat1, lng1, lat2, lng2) {
-    const R = 6371e3; const toRad = Math.PI / 180;
-    const dLat = (lat2 - lat1) * toRad, dLng = (lng2 - lng1) * toRad;
-    const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * toRad) * Math.cos(lat2 * toRad) * Math.sin(dLng / 2) ** 2;
-    return 2 * R * Math.asin(Math.sqrt(a));
-  }
-  function estimatePGA(M, Rkm) {
-    const a = -1.2, b = 0.45, c = 1.1, d = dAtt;
-    const lg = a + b * M - c * Math.log10(Math.max(1, Rkm)) - d * Rkm;
-    return Math.pow(10, lg);
-  }
-  function pgaToJMA(pga) {
-    if (pga > 1.0) return { sh: '7', idx: 8 };
-    if (pga > 0.6) return { sh: '6強', idx: 7 };
-    if (pga > 0.3) return { sh: '6弱', idx: 6 };
-    if (pga > 0.15) return { sh: '5強', idx: 5 };
-    if (pga > 0.06) return { sh: '5弱', idx: 4 };
-    if (pga > 0.025) return { sh: '4', idx: 3 };
-    if (pga > 0.01) return { sh: '3', idx: 2 };
-    if (pga > 0.003) return { sh: '2', idx: 1 };
-    return { sh: '1', idx: 0 };
-  }
-  function colorForIdx(i) {
-    const pal = ['#9ebed6', '#7fc9c9', '#6de0a8', '#f7e86b', '#ffd27a', '#ffb06b', '#ff8a5f', '#ff5a5a', '#c83b3b'];
-    return pal[Math.max(0, Math.min(pal.length - 1, i))];
-  }
-
-  // 距離キャッシュ
-  const H_CACHE = new Map(); // key:`e.id:s.id` -> km
-  function getHkmCached(e, s) {
-    const key = `${e.id}:${s.id}`;
-    if (!e._moved && !s._moved && H_CACHE.has(key)) return H_CACHE.get(key);
-    const h = hav(e.lat, e.lng, s.lat, s.lng) / 1000;
-    H_CACHE.set(key, h);
-    return h;
-  }
-  function markAllUnmoved() { epicenters.forEach(e => e._moved = false); stations.forEach(s => s._moved = false); }
-
-  function arrivals(epi, st) {
-    const Hkm = getHkmCached(epi, st);
-    const R = Math.sqrt(Hkm * Hkm + epi.depth * epi.depth);
-    return { tP: R / vp, tS: R / vs, Rkm: R, Hkm };
-  }
+  // 過度な 0 落ち回避（遠距離の有感を拾う）
+  const EPS = 3e-6; // 0.000003 g（従来 1e-6 より高め）
+  return Math.max(EPS, PGA);
+}
 
   /* ------------------------------------------------------------
    * 海域ベースン（津波）＆ JMA 震央地名（簡易ポリゴン/BB）
@@ -1869,251 +2048,257 @@ body[data-theme="light"] .section .content::-webkit-scrollbar-track{ background:
   //   - 沖（○○沖/○○方）などは沖側ベースン＋沿岸BBで判定
   // 必要に応じて追加可能：JMA_REGIONS.push({ name, poly:[ [lat,lng], ... ] }) or bbox:{lat1,lat2,lng1,lng2}
   const JMA_REGIONS = [
-    // --- 北海道・周辺 ---
-    { name: '北海道道北', bbox: { lat1: 44.0, lat2: 45.8, lng1: 141.0, lng2: 142.8 } },
-    { name: '北海道道東', bbox: { lat1: 43.0, lat2: 45.8, lng1: 143.0, lng2: 146.5 } },
-    { name: '北海道道央', bbox: { lat1: 42.3, lat2: 43.8, lng1: 140.7, lng2: 143.0 } },
-    { name: '北海道道南', bbox: { lat1: 41.2, lat2: 42.4, lng1: 140.2, lng2: 141.6 } },
-    { name: 'オホーツク海', basin: 'オホーツク海' },
-    { name: '北海道東方沖', basin: '太平洋', bbox: { lat1: 42.5, lat2: 45.5, lng1: 145.5, lng2: 149.5 } },
-    { name: '石狩湾', bbox: { lat1: 43.0, lat2: 43.7, lng1: 141.0, lng2: 141.7 } },
- 　 { name: '北海道西方沖', basin: '日本海', bbox: { lat1: 41.90, lat2: 45.00, lng1: 138.50, lng2: 141.00 } },
-    { name: '北海道南西沖', basin: '日本海', bbox: { lat1: 41.20, lat2: 42.50, lng1: 139.00, lng2: 141.50 } },
-    { name: '北海道南東沖', basin: '太平洋', bbox: { lat1: 41.00, lat2: 42.50, lng1: 142.00, lng2: 144.80 } },
-    { name: '釧路沖', basin: '太平洋', bbox: { lat1: 42.50, lat2: 43.30, lng1: 144.00, lng2: 145.50 } },
-    { name: '十勝沖', basin: '太平洋', bbox: { lat1: 42.20, lat2: 42.90, lng1: 143.20, lng2: 144.40 } },
-    { name: '根室半島南東沖', basin: '太平洋', bbox: { lat1: 43.10, lat2: 43.80, lng1: 145.50, lng2: 146.80 } },
-    { name: '青森県東方沖', basin: '太平洋', bbox: { lat1: 40.80, lat2: 41.80, lng1: 142.00, lng2: 144.00 } },
-    { name: '青森県西方沖', basin: '日本海', bbox: { lat1: 40.80, lat2: 41.60, lng1: 139.50, lng2: 140.80 } },
-    { name: '岩手県沖', basin: '太平洋', bbox: { lat1: 39.30, lat2: 40.60, lng1: 142.00, lng2: 143.60 } },
-    { name: '秋田県沖', basin: '日本海', bbox: { lat1: 39.30, lat2: 40.60, lng1: 139.50, lng2: 140.50 } },
-    { name: '山形県沖', basin: '日本海', bbox: { lat1: 38.40, lat2: 39.30, lng1: 138.60, lng2: 139.80 } },
-    { name: '新潟県沖', basin: '日本海', bbox: { lat1: 37.50, lat2: 38.60, lng1: 137.60, lng2: 139.40 } },
-    { name: '津軽海峡', basin: '日本海', bbox: { lat1: 41.20, lat2: 41.60, lng1: 140.50, lng2: 141.50 } },
-    { name: 'サハリン南部', bbox: { lat1: 46.00, lat2: 49.50, lng1: 141.50, lng2: 144.00 } },
-    { name: 'サハリン西方沖', basin: 'オホーツク海', bbox: { lat1: 47.00, lat2: 50.00, lng1: 140.00, lng2: 141.80 } },
-    { name: '千島列島', basin: '太平洋', bbox: { lat1: 43.00, lat2: 49.00, lng1: 146.00, lng2: 154.00 } },
-    { name: '千島列島南部', basin: '太平洋', bbox: { lat1: 43.00, lat2: 46.00, lng1: 147.00, lng2: 151.00 } },
-    { name: 'オホーツク海南部', basin: 'オホーツク海', bbox: { lat1: 44.00, lat2: 47.00, lng1: 142.00, lng2: 149.00 } },
+  // ====== 海域（優先評価。basin一致が必須のため陸点はヒットしない） ======
 
-    // --- 東北 ---
-    { name: '青森県北部', bbox: { lat1: 40.9, lat2: 41.5, lng1: 140.6, lng2: 141.4 } },
-    { name: '青森県南部', bbox: { lat1: 40.2, lat2: 40.9, lng1: 140.6, lng2: 141.6 } },
-    { name: '岩手県内陸北部', bbox: { lat1: 39.7, lat2: 40.4, lng1: 141.0, lng2: 141.9 } },
-    { name: '岩手県内陸南部', bbox: { lat1: 38.9, lat2: 39.7, lng1: 140.8, lng2: 141.9 } },
-    { name: '三陸沖', basin: '太平洋', bbox: { lat1: 38.0, lat2: 41.5, lng1: 142.0, lng2: 145.5 } },
-    { name: '宮城県北部', bbox: { lat1: 38.6, lat2: 39.2, lng1: 140.7, lng2: 141.6 } },
-    { name: '宮城県南部', bbox: { lat1: 38.0, lat2: 38.6, lng1: 140.5, lng2: 141.6 } },
-    { name: '宮城県沖', basin: '太平洋', bbox: { lat1: 37.8, lat2: 39.0, lng1: 141.8, lng2: 144.0 } },
-    { name: '秋田県内陸北部', bbox: { lat1: 39.9, lat2: 40.6, lng1: 140.1, lng2: 140.8 } },
-    { name: '秋田県内陸南部', bbox: { lat1: 39.1, lat2: 39.9, lng1: 140.0, lng2: 140.8 } },
-    { name: '山形県村山', bbox: { lat1: 38.2, lat2: 38.7, lng1: 140.1, lng2: 140.6 } },
-    { name: '山形県置賜', bbox: { lat1: 37.8, lat2: 38.3, lng1: 139.9, lng2: 140.6 } },
-    { name: '福島県中通り', bbox: { lat1: 37.1, lat2: 37.9, lng1: 139.4, lng2: 140.7 } },
-    { name: '福島県浜通り', bbox: { lat1: 36.8, lat2: 37.9, lng1: 140.6, lng2: 141.2 } },
-    { name: '福島県会津', bbox: { lat1: 37.1, lat2: 37.9, lng1: 139.2, lng2: 139.9 } },
-    { name: '福島県沖', basin: '太平洋', bbox: { lat1: 36.8, lat2: 38.0, lng1: 141.4, lng2: 144.0 } },
+  // --- 太平洋（北海道〜東北〜関東） ---
+  { name: '根室半島南東沖', basin: '太平洋', bbox: { lat1: 43.10, lat2: 43.80, lng1: 145.50, lng2: 146.80 } },
+  { name: '釧路沖',       basin: '太平洋', bbox: { lat1: 42.50, lat2: 43.30, lng1: 144.00, lng2: 145.50 } },
+  { name: '十勝沖',       basin: '太平洋', bbox: { lat1: 42.20, lat2: 42.95, lng1: 143.20, lng2: 144.50 } },
+  { name: '北海道東方沖', basin: '太平洋', bbox: { lat1: 42.50, lat2: 45.50, lng1: 145.50, lng2: 149.50 } },
+  { name: '三陸沖',       basin: '太平洋', bbox: { lat1: 38.00, lat2: 41.60, lng1: 142.00, lng2: 145.60 } },
+  { name: '岩手県沖',     basin: '太平洋', bbox: { lat1: 39.30, lat2: 40.60, lng1: 142.00, lng2: 143.60 } },
+  { name: '宮城県沖',     basin: '太平洋', bbox: { lat1: 37.80, lat2: 39.00, lng1: 141.80, lng2: 144.00 } },
+  { name: '福島県沖',     basin: '太平洋', bbox: { lat1: 36.80, lat2: 38.05, lng1: 141.40, lng2: 144.00 } },
+  // ★内陸誤判定対策：茨城内陸は海を拾わないよう縮小、代わりに沖を西へ拡張
+  { name: '茨城県沖',     basin: '太平洋', bbox: { lat1: 35.70, lat2: 36.95, lng1: 140.45, lng2: 142.80 } },
+  { name: '常磐沖',       basin: '太平洋', bbox: { lat1: 36.60, lat2: 37.90, lng1: 141.50, lng2: 143.00 } },
+  { name: '房総沖',       basin: '太平洋', bbox: { lat1: 34.80, lat2: 35.95, lng1: 140.60, lng2: 142.40 } },
+  { name: '千葉県東方沖', basin: '太平洋', bbox: { lat1: 35.00, lat2: 36.20, lng1: 140.80, lng2: 142.80 } },
+  { name: '相模湾',       basin: '太平洋', bbox: { lat1: 34.90, lat2: 35.42, lng1: 139.00, lng2: 140.00 } },
+  { name: '相模灘',       basin: '太平洋', bbox: { lat1: 35.00, lat2: 35.40, lng1: 139.00, lng2: 139.80 } },
+  { name: '東京湾北部',   basin: '太平洋', bbox: { lat1: 35.45, lat2: 35.72, lng1: 139.75, lng2: 140.05 } },
+  { name: '東京湾',       basin: '太平洋', bbox: { lat1: 35.12, lat2: 35.62, lng1: 139.70, lng2: 140.10 } },
+  { name: '伊豆大島近海', basin: '太平洋', bbox: { lat1: 33.80, lat2: 34.90, lng1: 138.60, lng2: 140.10 } },
+  { name: '伊豆半島東方沖', basin: '太平洋', bbox: { lat1: 34.80, lat2: 35.20, lng1: 139.20, lng2: 140.30 } },
+  { name: '伊豆半島南方沖', basin: '太平洋', bbox: { lat1: 33.50, lat2: 34.50, lng1: 138.50, lng2: 139.70 } },
 
-    // --- 関東・甲信 ---
-    { name: '茨城県北部', bbox: { lat1: 36.6, lat2: 36.95, lng1: 140.2, lng2: 140.7 } },
-    { name: '茨城県南部', bbox: { lat1: 35.9, lat2: 36.6, lng1: 139.9, lng2: 140.6 } },
-    { name: '茨城県沖', basin: '太平洋', bbox: { lat1: 35.7, lat2: 36.9, lng1: 141.0, lng2: 142.8 } },
-    { name: '栃木県北部', bbox: { lat1: 36.7, lat2: 37.3, lng1: 139.3, lng2: 140.4 } },
-    { name: '栃木県南部', bbox: { lat1: 36.2, lat2: 36.7, lng1: 139.3, lng2: 140.4 } }, // ← 指摘修正
-    { name: '群馬県北部', bbox: { lat1: 36.65, lat2: 36.95, lng1: 138.6, lng2: 139.4 } },
-    { name: '群馬県南部', bbox: { lat1: 36.2, lat2: 36.65, lng1: 138.6, lng2: 139.6 } },
-    { name: '埼玉県北部', bbox: { lat1: 36.0, lat2: 36.3, lng1: 139.2, lng2: 139.7 } },
-    { name: '埼玉県南部', bbox: { lat1: 35.7, lat2: 36.0, lng1: 139.2, lng2: 139.9 } },
-    { name: '千葉県北西部', bbox: { lat1: 35.55, lat2: 35.9, lng1: 139.8, lng2: 140.2 } },
-    { name: '千葉県南部', bbox: { lat1: 34.9, lat2: 35.5, lng1: 139.8, lng2: 140.3 } },
-    { name: '千葉県東方沖', basin: '太平洋', bbox: { lat1: 35.0, lat2: 36.2, lng1: 140.8, lng2: 142.8 } },
-    { name: '東京都23区', bbox: { lat1: 35.6, lat2: 35.78, lng1: 139.6, lng2: 139.9 } },
-    { name: '神奈川県東部', bbox: { lat1: 35.3, lat2: 35.6, lng1: 139.5, lng2: 139.8 } },
-    { name: '相模湾', basin: '太平洋', bbox: { lat1: 34.9, lat2: 35.4, lng1: 139.0, lng2: 140.0 } },
-    { name: '伊豆大島近海', basin: '太平洋', bbox: { lat1: 33.8, lat2: 34.9, lng1: 138.6, lng2: 140.1 } },
-    { name: '山梨県中・西部', bbox: { lat1: 35.3, lat2: 35.9, lng1: 138.2, lng2: 138.9 } },
-    { name: '長野県北部', bbox: { lat1: 36.5, lat2: 37.0, lng1: 137.6, lng2: 138.6 } },
-    { name: '長野県南部', bbox: { lat1: 35.2, lat2: 36.5, lng1: 137.4, lng2: 138.6 } },
-　　{ name: '東京湾', basin: '太平洋', bbox: { lat1: 35.15, lat2: 35.55, lng1: 139.70, lng2: 140.10 } },
-    { name: '神奈川県西部', bbox: { lat1: 35.20, lat2: 35.60, lng1: 139.00, lng2: 139.50 } },
-    { name: '東京都多摩東部', bbox: { lat1: 35.60, lat2: 35.80, lng1: 139.30, lng2: 139.60 } },
-    { name: '東京都多摩西部', bbox: { lat1: 35.35, lat2: 35.80, lng1: 138.90, lng2: 139.30 } },
-    { name: '房総半島南方沖', basin: '太平洋', bbox: { lat1: 34.00, lat2: 35.10, lng1: 140.00, lng2: 141.60 } },
-    { name: '常磐沖', basin: '太平洋', bbox: { lat1: 36.60, lat2: 37.80, lng1: 141.50, lng2: 143.00 } },
-    { name: '伊豆半島東方沖', basin: '太平洋', bbox: { lat1: 34.80, lat2: 35.20, lng1: 139.20, lng2: 140.30 } },
-    { name: '伊豆半島南方沖', basin: '太平洋', bbox: { lat1: 33.50, lat2: 34.50, lng1: 138.50, lng2: 139.70 } },
-    { name: '東京湾北部', basin: '太平洋', bbox: { lat1: 35.45, lat2: 35.70, lng1: 139.75, lng2: 140.05 } },
-　　 { name: '八丈島近海', basin: '太平洋', bbox: { lat1: 32.80, lat2: 33.50, lng1: 139.50, lng2: 140.90 } },
-    { name: '八丈島東方沖', basin: '太平洋', bbox: { lat1: 32.50, lat2: 33.50, lng1: 140.90, lng2: 142.50 } },
-    { name: '鳥島近海', basin: '太平洋', bbox: { lat1: 29.50, lat2: 31.50, lng1: 139.00, lng2: 141.50 } },
-    { name: '鳥島東方沖', basin: '太平洋', bbox: { lat1: 29.00, lat2: 31.00, lng1: 141.50, lng2: 144.00 } },
-    { name: '小笠原諸島近海', basin: '太平洋', bbox: { lat1: 26.50, lat2: 28.50, lng1: 140.80, lng2: 142.50 } },
-    { name: '小笠原諸島西方沖', basin: '太平洋', bbox: { lat1: 26.00, lat2: 28.50, lng1: 138.50, lng2: 140.80 } },
-    { name: '小笠原諸島東方沖', basin: '太平洋', bbox: { lat1: 26.00, lat2: 28.50, lng1: 142.50, lng2: 145.00 } },
-    { name: '父島近海', basin: '太平洋', bbox: { lat1: 27.30, lat2: 27.90, lng1: 141.80, lng2: 142.30 } },
-    { name: '母島近海', basin: '太平洋', bbox: { lat1: 26.50, lat2: 27.20, lng1: 142.00, lng2: 142.60 } },
+  // --- 太平洋（中部〜近畿〜四国・九州） ---
+  { name: '駿河湾',       basin: '太平洋', bbox: { lat1: 34.50, lat2: 35.05, lng1: 138.30, lng2: 138.92 } },
+  { name: '遠州灘',       basin: '太平洋', bbox: { lat1: 34.20, lat2: 34.85, lng1: 137.80, lng2: 138.85 } },
+  { name: '熊野灘',       basin: '太平洋', bbox: { lat1: 33.50, lat2: 34.30, lng1: 135.60, lng2: 136.90 } },
+  { name: '紀伊半島南方沖', basin: '太平洋', bbox: { lat1: 32.80, lat2: 33.85, lng1: 135.00, lng2: 137.20 } },
+  { name: '土佐湾',       basin: '太平洋', bbox: { lat1: 33.10, lat2: 33.55, lng1: 133.30, lng2: 134.30 } },
+  { name: '四国沖',       basin: '太平洋', bbox: { lat1: 32.00, lat2: 33.70, lng1: 132.00, lng2: 135.50 } },
+  { name: '紀伊水道',     basin: '太平洋', bbox: { lat1: 33.70, lat2: 34.50, lng1: 134.80, lng2: 135.60 } },
+  { name: '豊後水道',     basin: '太平洋', bbox: { lat1: 32.70, lat2: 33.60, lng1: 132.50, lng2: 133.60 } },
+  { name: '日向灘',       basin: '太平洋', bbox: { lat1: 31.00, lat2: 32.30, lng1: 131.60, lng2: 132.50 } },
 
- 　 // --- 太平洋側の未収録（本州～四国～九州） ---
-    { name: '熊野灘', basin: '太平洋', bbox: { lat1: 33.50, lat2: 34.30, lng1: 135.60, lng2: 136.90 } },
-    { name: '土佐湾', basin: '太平洋', bbox: { lat1: 33.10, lat2: 33.50, lng1: 133.30, lng2: 134.30 } },
-    { name: '四国沖', basin: '太平洋', bbox: { lat1: 32.00, lat2: 33.70, lng1: 132.00, lng2: 135.50 } },
-    { name: '紀伊半島南方沖', basin: '太平洋', bbox: { lat1: 32.80, lat2: 33.80, lng1: 135.00, lng2: 137.20 } },
-    { name: '相模灘', basin: '太平洋', bbox: { lat1: 35.00, lat2: 35.40, lng1: 139.00, lng2: 139.80 } },
+  // --- 太平洋（伊豆小笠原〜鳥島） ---
+  { name: '八丈島近海',     basin: '太平洋', bbox: { lat1: 32.80, lat2: 33.50, lng1: 139.50, lng2: 140.90 } },
+  { name: '八丈島東方沖',   basin: '太平洋', bbox: { lat1: 32.50, lat2: 33.50, lng1: 140.90, lng2: 142.50 } },
+  { name: '鳥島近海',       basin: '太平洋', bbox: { lat1: 29.50, lat2: 31.50, lng1: 139.00, lng2: 141.50 } },
+  { name: '鳥島東方沖',     basin: '太平洋', bbox: { lat1: 29.00, lat2: 31.00, lng1: 141.50, lng2: 144.00 } },
+  { name: '小笠原諸島近海', basin: '太平洋', bbox: { lat1: 26.50, lat2: 28.50, lng1: 140.80, lng2: 142.50 } },
+  { name: '小笠原諸島西方沖', basin: '太平洋', bbox: { lat1: 26.00, lat2: 28.50, lng1: 138.50, lng2: 140.80 } },
+  { name: '小笠原諸島東方沖', basin: '太平洋', bbox: { lat1: 26.00, lat2: 28.50, lng1: 142.50, lng2: 145.00 } },
+  { name: '父島近海',       basin: '太平洋', bbox: { lat1: 27.30, lat2: 27.90, lng1: 141.80, lng2: 142.30 } },
+  { name: '母島近海',       basin: '太平洋', bbox: { lat1: 26.50, lat2: 27.20, lng1: 142.00, lng2: 142.60 } },
 
-    // --- 東海・北陸・近畿 ---
-    { name: '静岡県中部', bbox: { lat1: 34.8, lat2: 35.1, lng1: 138.2, lng2: 138.5 } },
-    { name: '駿河湾', basin: '太平洋', bbox: { lat1: 34.5, lat2: 35.0, lng1: 138.3, lng2: 138.9 } },
-    { name: '遠州灘', basin: '太平洋', bbox: { lat1: 34.2, lat2: 34.8, lng1: 137.8, lng2: 138.8 } },
-    { name: '愛知県西部', bbox: { lat1: 34.7, lat2: 35.3, lng1: 136.7, lng2: 137.2 } },
-    { name: '三重県北部', bbox: { lat1: 34.7, lat2: 35.2, lng1: 136.2, lng2: 136.8 } },
-    { name: '三重県南東沖', basin: '太平洋', bbox: { lat1: 33.6, lat2: 34.6, lng1: 136.8, lng2: 137.9 } },
-    { name: '石川県能登', bbox: { lat1: 37.1, lat2: 37.6, lng1: 136.7, lng2: 137.5 } },
-    { name: '福井県嶺北', bbox: { lat1: 35.7, lat2: 36.2, lng1: 136.0, lng2: 136.8 } },
-    { name: '大阪府北部', bbox: { lat1: 34.7, lat2: 34.9, lng1: 135.4, lng2: 135.7 } },
-    { name: '大阪湾', bbox: { lat1: 34.25, lat2: 34.7, lng1: 135.0, lng2: 135.5 } },
-    { name: '京都府南部', bbox: { lat1: 34.8, lat2: 35.2, lng1: 135.5, lng2: 136.1 } },
-    { name: '兵庫県南東部', bbox: { lat1: 34.6, lat2: 34.9, lng1: 135.0, lng2: 135.4 } },
-    { name: '紀伊水道', basin: '太平洋', bbox: { lat1: 33.7, lat2: 34.5, lng1: 134.8, lng2: 135.6 } },
-　　{ name: '日本海北部', basin: '日本海', bbox: { lat1: 41.50, lat2: 45.50, lng1: 135.00, lng2: 140.00 } },
-    { name: '日本海中部', basin: '日本海', bbox: { lat1: 38.00, lat2: 41.50, lng1: 134.00, lng2: 138.50 } },
-    { name: '日本海南部', basin: '日本海', bbox: { lat1: 35.00, lat2: 38.00, lng1: 131.50, lng2: 136.00 } },
-    { name: '佐渡付近', basin: '日本海', bbox: { lat1: 37.70, lat2: 38.40, lng1: 138.30, lng2: 138.80 } },
-    { name: '富山湾', basin: '日本海', bbox: { lat1: 36.70, lat2: 37.10, lng1: 136.70, lng2: 137.50 } },
-    { name: '能登半島沖', basin: '日本海', bbox: { lat1: 37.20, lat2: 38.20, lng1: 136.50, lng2: 137.80 } },
-    { name: '若狭湾', basin: '日本海', bbox: { lat1: 35.40, lat2: 35.80, lng1: 135.50, lng2: 136.40 } },
-    { name: '山陰沖', basin: '日本海', bbox: { lat1: 34.80, lat2: 36.00, lng1: 132.00, lng2: 135.00 } },
-    { name: '玄界灘', basin: '日本海', bbox: { lat1: 33.60, lat2: 34.30, lng1: 129.20, lng2: 130.50 } },
-    { name: '対馬近海', basin: '日本海', bbox: { lat1: 34.00, lat2: 35.50, lng1: 128.50, lng2: 130.00 } },
+  // --- 日本海系 ---
+  { name: '北海道西方沖',     basin: '日本海', bbox: { lat1: 41.90, lat2: 45.00, lng1: 138.50, lng2: 141.00 } },
+  { name: '北海道南西沖',     basin: '日本海', bbox: { lat1: 41.20, lat2: 42.50, lng1: 139.00, lng2: 141.50 } },
+  { name: '青森県西方沖',     basin: '日本海', bbox: { lat1: 40.80, lat2: 41.60, lng1: 139.50, lng2: 140.80 } },
+  { name: '秋田県沖',         basin: '日本海', bbox: { lat1: 39.30, lat2: 40.60, lng1: 139.50, lng2: 140.50 } },
+  { name: '山形県沖',         basin: '日本海', bbox: { lat1: 38.40, lat2: 39.30, lng1: 138.60, lng2: 139.80 } },
+  { name: '新潟県沖',         basin: '日本海', bbox: { lat1: 37.50, lat2: 38.60, lng1: 137.60, lng2: 139.40 } },
+  { name: '津軽海峡',         basin: '日本海', bbox: { lat1: 41.20, lat2: 41.65, lng1: 140.50, lng2: 141.50 } },
+  { name: '富山湾',           basin: '日本海', bbox: { lat1: 36.70, lat2: 37.10, lng1: 136.70, lng2: 137.50 } },
+  { name: '能登半島沖',       basin: '日本海', bbox: { lat1: 37.20, lat2: 38.20, lng1: 136.50, lng2: 137.80 } },
+  { name: '若狭湾',           basin: '日本海', bbox: { lat1: 35.40, lat2: 35.85, lng1: 135.50, lng2: 136.40 } },
+  { name: '山陰沖',           basin: '日本海', bbox: { lat1: 34.80, lat2: 36.00, lng1: 132.00, lng2: 135.00 } },
+  { name: '玄界灘',           basin: '日本海', bbox: { lat1: 33.60, lat2: 34.30, lng1: 129.20, lng2: 130.50 } },
+  { name: '対馬近海',         basin: '日本海', bbox: { lat1: 34.00, lat2: 35.50, lng1: 128.50, lng2: 130.00 } },
+  { name: '佐渡付近',         basin: '日本海', bbox: { lat1: 37.70, lat2: 38.40, lng1: 138.30, lng2: 138.80 } },
+  { name: '日本海北部',       basin: '日本海', bbox: { lat1: 41.50, lat2: 45.50, lng1: 135.00, lng2: 140.00 } },
+  { name: '日本海中部',       basin: '日本海', bbox: { lat1: 38.00, lat2: 41.50, lng1: 134.00, lng2: 138.50 } },
+  { name: '日本海南部',       basin: '日本海', bbox: { lat1: 35.00, lat2: 38.00, lng1: 131.50, lng2: 136.00 } },
 
-    // --- 中国・四国・九州 ---
-    { name: '広島県南東部', bbox: { lat1: 34.2, lat2: 34.6, lng1: 132.4, lng2: 133.2 } },
-    { name: '岡山県南部', bbox: { lat1: 34.4, lat2: 34.9, lng1: 133.6, lng2: 134.2 } },
-    { name: '香川県', bbox: { lat1: 34.0, lat2: 34.4, lng1: 133.6, lng2: 134.4 } },
-    { name: '徳島県北部', bbox: { lat1: 33.9, lat2: 34.2, lng1: 134.1, lng2: 134.6 } },
-    { name: '愛媛県東予', bbox: { lat1: 33.8, lat2: 34.1, lng1: 133.0, lng2: 133.6 } },
-    { name: '愛媛県南予', bbox: { lat1: 32.8, lat2: 33.6, lng1: 132.3, lng2: 132.9 } },
-    { name: '豊後水道', basin: '太平洋', bbox: { lat1: 32.7, lat2: 33.6, lng1: 132.5, lng2: 133.6 } },
-    { name: '福岡県', bbox: { lat1: 33.3, lat2: 33.9, lng1: 130.2, lng2: 130.7 } },
-    { name: '佐賀県', bbox: { lat1: 33.0, lat2: 33.5, lng1: 129.8, lng2: 130.4 } },
-    { name: '長崎県北部', bbox: { lat1: 33.0, lat2: 33.4, lng1: 129.5, lng2: 130.2 } },
-    { name: '熊本県北部', bbox: { lat1: 32.7, lat2: 33.2, lng1: 130.4, lng2: 130.9 } },
-    { name: '熊本県南部', bbox: { lat1: 32.0, lat2: 32.7, lng1: 130.5, lng2: 131.1 } },
-    { name: '大分県中部', bbox: { lat1: 33.0, lat2: 33.4, lng1: 131.4, lng2: 131.8 } },
-    { name: '宮崎県北部平野部', bbox: { lat1: 32.1, lat2: 32.6, lng1: 131.4, lng2: 131.7 } },
-    { name: '鹿児島県薩摩', bbox: { lat1: 31.1, lat2: 31.9, lng1: 130.2, lng2: 130.9 } },
-    { name: '奄美近海', basin: '東シナ海', bbox: { lat1: 26.0, lat2: 28.9, lng1: 128.0, lng2: 130.5 } },
+  // --- オホーツク海・千島 ---
+  { name: 'オホーツク海',       basin: 'オホーツク海' },
+  { name: 'オホーツク海南部',   basin: 'オホーツク海', bbox: { lat1: 44.00, lat2: 47.00, lng1: 142.00, lng2: 149.00 } },
+  { name: 'サハリン西方沖',     basin: 'オホーツク海', bbox: { lat1: 47.00, lat2: 50.00, lng1: 140.00, lng2: 141.80 } },
+  { name: '千島列島',           basin: '太平洋',       bbox: { lat1: 43.00, lat2: 49.00, lng1: 146.00, lng2: 154.00 } },
+  { name: '千島列島南部',       basin: '太平洋',       bbox: { lat1: 43.00, lat2: 46.00, lng1: 147.00, lng2: 151.00 } },
 
-    // --- 九州・南西諸島 ---
-    { name: '日向灘', basin: '太平洋', bbox: { lat1: 31.00, lat2: 32.30, lng1: 131.60, lng2: 132.50 } },
-    { name: '九州西方沖', basin: '東シナ海', bbox: { lat1: 31.00, lat2: 33.00, lng1: 127.00, lng2: 129.00 } },
-    { name: '鹿児島湾', bbox: { lat1: 31.20, lat2: 31.60, lng1: 130.50, lng2: 130.80 } },
-    { name: '甑島近海', basin: '東シナ海', bbox: { lat1: 31.70, lat2: 32.20, lng1: 129.80, lng2: 130.30 } },
-    { name: '種子島近海', basin: '太平洋', bbox: { lat1: 30.10, lat2: 30.80, lng1: 130.50, lng2: 131.20 } },
-    { name: '屋久島近海', basin: '太平洋', bbox: { lat1: 30.10, lat2: 30.60, lng1: 130.90, lng2: 131.60 } },
-    { name: 'トカラ列島近海', basin: '太平洋', bbox: { lat1: 28.00, lat2: 30.00, lng1: 129.00, lng2: 130.50 } },
-    { name: '奄美大島近海', basin: '東シナ海', bbox: { lat1: 27.50, lat2: 28.80, lng1: 128.30, lng2: 130.00 } },
-    { name: '喜界島近海', basin: '東シナ海', bbox: { lat1: 28.00, lat2: 28.50, lng1: 129.60, lng2: 130.00 } },
-    { name: '徳之島近海', basin: '東シナ海', bbox: { lat1: 27.60, lat2: 28.10, lng1: 128.80, lng2: 129.30 } },
-    { name: '沖永良部島近海', basin: '東シナ海', bbox: { lat1: 27.20, lat2: 27.60, lng1: 128.50, lng2: 129.00 } },
-    { name: '与論島近海', basin: '東シナ海', bbox: { lat1: 27.00, lat2: 27.20, lng1: 128.90, lng2: 129.20 } },
+  // --- 東シナ海・沖縄周辺 ---
+  { name: '奄美近海',           basin: '東シナ海', bbox: { lat1: 26.00, lat2: 28.90, lng1: 128.00, lng2: 130.50 } },
+  { name: '九州西方沖',         basin: '東シナ海', bbox: { lat1: 31.00, lat2: 33.00, lng1: 127.00, lng2: 129.00 } },
+  { name: '甑島近海',           basin: '東シナ海', bbox: { lat1: 31.70, lat2: 32.20, lng1: 129.80, lng2: 130.30 } },
+  { name: '沖縄本島近海',       basin: '東シナ海', bbox: { lat1: 26.00, lat2: 27.20, lng1: 127.00, lng2: 128.20 } },
+  { name: '沖縄本島北西沖',     basin: '東シナ海', bbox: { lat1: 26.50, lat2: 27.50, lng1: 126.00, lng2: 127.20 } },
+  { name: '沖縄本島南方沖',     basin: '東シナ海', bbox: { lat1: 25.00, lat2: 26.00, lng1: 127.00, lng2: 128.50 } },
+  { name: '慶良間諸島近海',     basin: '東シナ海', bbox: { lat1: 26.00, lat2: 26.50, lng1: 127.00, lng2: 127.80 } },
+  { name: '久米島近海',         basin: '東シナ海', bbox: { lat1: 26.00, lat2: 26.60, lng1: 126.90, lng2: 127.60 } },
+  { name: '宮古島近海',         basin: '東シナ海', bbox: { lat1: 24.50, lat2: 25.20, lng1: 125.00, lng2: 126.00 } },
+  { name: '宮古島北西沖',       basin: '東シナ海', bbox: { lat1: 25.00, lat2: 25.80, lng1: 124.00, lng2: 125.10 } },
+  { name: '石垣島近海',         basin: '東シナ海', bbox: { lat1: 24.10, lat2: 24.60, lng1: 124.00, lng2: 124.60 } },
+  { name: '石垣島北西沖',       basin: '東シナ海', bbox: { lat1: 24.60, lat2: 25.30, lng1: 123.00, lng2: 124.20 } },
+  { name: '西表島近海',         basin: '東シナ海', bbox: { lat1: 24.10, lat2: 24.60, lng1: 123.50, lng2: 124.10 } },
+  { name: '与那国島近海',       basin: '東シナ海', bbox: { lat1: 24.30, lat2: 24.60, lng1: 122.90, lng2: 123.30 } },
+  { name: '北大東島近海',       basin: '太平洋',   bbox: { lat1: 25.90, lat2: 26.40, lng1: 131.10, lng2: 131.60 } },
+  { name: '南大東島近海',       basin: '太平洋',   bbox: { lat1: 25.50, lat2: 25.90, lng1: 131.10, lng2: 131.60 } },
+  { name: '南大東島東方沖',     basin: '太平洋',   bbox: { lat1: 25.30, lat2: 25.80, lng1: 132.00, lng2: 133.50 } },
 
- // --- 沖縄周辺 ---
-    { name: '沖縄本島近海', basin: '東シナ海', bbox: { lat1: 26.00, lat2: 27.20, lng1: 127.00, lng2: 128.20 } },
-    { name: '沖縄本島北西沖', basin: '東シナ海', bbox: { lat1: 26.50, lat2: 27.50, lng1: 126.00, lng2: 127.20 } },
-    { name: '沖縄本島南方沖', basin: '東シナ海', bbox: { lat1: 25.00, lat2: 26.00, lng1: 127.00, lng2: 128.50 } },
-    { name: '慶良間諸島近海', basin: '東シナ海', bbox: { lat1: 26.00, lat2: 26.50, lng1: 127.00, lng2: 127.80 } },
-    { name: '久米島近海', basin: '東シナ海', bbox: { lat1: 26.00, lat2: 26.60, lng1: 126.90, lng2: 127.60 } },
-    { name: '北大東島近海', basin: '太平洋', bbox: { lat1: 25.90, lat2: 26.40, lng1: 131.10, lng2: 131.60 } },
-    { name: '南大東島近海', basin: '太平洋', bbox: { lat1: 25.50, lat2: 25.90, lng1: 131.10, lng2: 131.60 } },
-    { name: '南大東島東方沖', basin: '太平洋', bbox: { lat1: 25.30, lat2: 25.80, lng1: 132.00, lng2: 133.50 } },
-    { name: '宮古島近海', basin: '東シナ海', bbox: { lat1: 24.50, lat2: 25.20, lng1: 125.00, lng2: 126.00 } },
-    { name: '宮古島北西沖', basin: '東シナ海', bbox: { lat1: 25.00, lat2: 25.80, lng1: 124.00, lng2: 125.10 } },
-    { name: '石垣島近海', basin: '東シナ海', bbox: { lat1: 24.10, lat2: 24.60, lng1: 124.00, lng2: 124.60 } },
-    { name: '石垣島北西沖', basin: '東シナ海', bbox: { lat1: 24.60, lat2: 25.30, lng1: 123.00, lng2: 124.20 } },
-    { name: '西表島近海', basin: '東シナ海', bbox: { lat1: 24.10, lat2: 24.60, lng1: 123.50, lng2: 124.10 } },
-    { name: '与那国島近海', basin: '東シナ海', bbox: { lat1: 24.30, lat2: 24.60, lng1: 122.90, lng2: 123.30 } },
+  // --- 広域トラフ・海溝 ---
+  { name: '日本海溝',     basin: '太平洋', bbox: { lat1: 36.00, lat2: 41.50, lng1: 142.00, lng2: 146.00 } },
+  { name: '相模トラフ',   basin: '太平洋', bbox: { lat1: 34.60, lat2: 35.30, lng1: 139.00, lng2: 140.00 } },
+  { name: '駿河トラフ',   basin: '太平洋', bbox: { lat1: 34.40, lat2: 35.10, lng1: 138.30, lng2: 138.90 } },
+  { name: '南海トラフ',   basin: '太平洋', bbox: { lat1: 32.00, lat2: 34.50, lng1: 135.00, lng2: 138.50 } },
 
-    // --- 東アジア外縁（図にある枠） ---
-    { name: '台湾付近', bbox: { lat1: 22.50, lat2: 25.50, lng1: 120.50, lng2: 122.50 } },
-    { name: '黄海', basin: '東シナ海', bbox: { lat1: 33.00, lat2: 37.00, lng1: 123.00, lng2: 126.00 } },
-    { name: '朝鮮半島南部', bbox: { lat1: 34.00, lat2: 37.00, lng1: 126.00, lng2: 129.00 } },
-    { name: '朝鮮半島北部', bbox: { lat1: 38.00, lat2: 41.00, lng1: 125.00, lng2: 130.00 } },
-    { name: '中国東北部', bbox: { lat1: 41.00, lat2: 46.00, lng1: 122.00, lng2: 127.00 } },
-    { name: 'ウラジオストク付近', bbox: { lat1: 42.00, lat2: 44.00, lng1: 130.50, lng2: 133.00 } },
-    { name: 'シベリア南部', bbox: { lat1: 47.00, lat2: 53.00, lng1: 125.00, lng2: 140.00 } },
-    { name: 'フィリピン海北部', basin: '太平洋', bbox: { lat1: 19.50, lat2: 23.50, lng1: 130.00, lng2: 142.00 } },
-    { name: 'マリアナ諸島', basin: '太平洋', bbox: { lat1: 12.00, lat2: 20.00, lng1: 140.00, lng2: 147.00 } },
+  // ====== 内湾・瀬戸内（太平洋系として扱う） ======
+  { name: '播磨灘',   basin: '太平洋', bbox: { lat1: 34.20, lat2: 34.60, lng1: 134.30, lng2: 134.90 } },
+  { name: '備讃瀬戸', basin: '太平洋', bbox: { lat1: 34.20, lat2: 34.50, lng1: 133.80, lng2: 134.30 } },
+  { name: '燧灘',     basin: '太平洋', bbox: { lat1: 33.90, lat2: 34.30, lng1: 132.80, lng2: 133.80 } },
+  { name: '安芸灘',   basin: '太平洋', bbox: { lat1: 34.00, lat2: 34.40, lng1: 132.20, lng2: 132.80 } },
+  { name: '周防灘',   basin: '太平洋', bbox: { lat1: 33.70, lat2: 34.02, lng1: 131.00, lng2: 131.90 } },
+  { name: '伊予灘',   basin: '太平洋', bbox: { lat1: 33.70, lat2: 34.20, lng1: 132.20, lng2: 132.90 } },
 
-　　// --- 瀬戸内・内湾（太平洋系として扱う） ---
-    { name: '播磨灘', basin: '太平洋', bbox: { lat1: 34.20, lat2: 34.60, lng1: 134.30, lng2: 134.90 } },
-    { name: '備讃瀬戸', basin: '太平洋', bbox: { lat1: 34.20, lat2: 34.50, lng1: 133.80, lng2: 134.30 } },
-    { name: '燧灘', basin: '太平洋', bbox: { lat1: 33.90, lat2: 34.30, lng1: 132.80, lng2: 133.80 } },
-    { name: '安芸灘', basin: '太平洋', bbox: { lat1: 34.00, lat2: 34.40, lng1: 132.20, lng2: 132.80 } },
-    { name: '周防灘', basin: '太平洋', bbox: { lat1: 33.70, lat2: 34.00, lng1: 131.00, lng2: 131.90 } },
-    { name: '伊予灘', basin: '太平洋', bbox: { lat1: 33.70, lat2: 34.20, lng1: 132.20, lng2: 132.90 } },
+  // ====== 内陸（より狭い順に） ======
 
-// --- 内陸の主要未収録（代表的なJMA区分） ---
-    { name: '新潟県上越', bbox: { lat1: 36.70, lat2: 37.40, lng1: 137.80, lng2: 138.70 } },
-    { name: '新潟県中越', bbox: { lat1: 37.10, lat2: 37.60, lng1: 138.50, lng2: 139.30 } },
-    { name: '新潟県下越', bbox: { lat1: 37.60, lat2: 38.20, lng1: 139.20, lng2: 139.70 } },
-    { name: '富山県東部', bbox: { lat1: 36.50, lat2: 36.90, lng1: 137.40, lng2: 137.80 } },
-    { name: '富山県西部', bbox: { lat1: 36.50, lat2: 36.90, lng1: 136.90, lng2: 137.40 } },
-    { name: '石川県加賀', bbox: { lat1: 36.10, lat2: 36.60, lng1: 136.30, lng2: 136.80 } },
-    { name: '福井県嶺南', bbox: { lat1: 35.30, lat2: 35.70, lng1: 135.60, lng2: 136.30 } },
-    { name: '岐阜県飛騨', bbox: { lat1: 36.10, lat2: 36.60, lng1: 136.70, lng2: 137.60 } },
-    { name: '岐阜県美濃', bbox: { lat1: 35.20, lat2: 36.10, lng1: 136.50, lng2: 137.30 } },
-    { name: '静岡県東部', bbox: { lat1: 34.80, lat2: 35.20, lng1: 138.70, lng2: 139.20 } },
-    { name: '静岡県西部', bbox: { lat1: 34.60, lat2: 34.90, lng1: 137.60, lng2: 138.20 } },
-    { name: '愛知県東部', bbox: { lat1: 34.80, lat2: 35.20, lng1: 137.20, lng2: 137.80 } },
-    { name: '三重県中部', bbox: { lat1: 34.40, lat2: 34.90, lng1: 136.30, lng2: 136.80 } },
-    { name: '三重県南部', bbox: { lat1: 33.70, lat2: 34.40, lng1: 136.00, lng2: 136.90 } },
-    { name: '滋賀県北部', bbox: { lat1: 35.30, lat2: 35.70, lng1: 135.90, lng2: 136.40 } },
-    { name: '滋賀県南部', bbox: { lat1: 34.90, lat2: 35.30, lng1: 135.80, lng2: 136.30 } },
-    { name: '京都府北部', bbox: { lat1: 35.30, lat2: 35.70, lng1: 135.10, lng2: 135.80 } },
-    { name: '兵庫県北部', bbox: { lat1: 35.10, lat2: 35.70, lng1: 134.60, lng2: 135.20 } },
-    { name: '兵庫県南西部', bbox: { lat1: 34.60, lat2: 35.00, lng1: 134.60, lng2: 135.00 } },
-    { name: '大阪府南部', bbox: { lat1: 34.30, lat2: 34.70, lng1: 135.45, lng2: 135.70 } },
-    { name: '奈良県北部', bbox: { lat1: 34.50, lat2: 34.80, lng1: 135.60, lng2: 136.10 } },
-    { name: '奈良県南部', bbox: { lat1: 33.90, lat2: 34.50, lng1: 135.60, lng2: 136.20 } },
-    { name: '和歌山県北部', bbox: { lat1: 34.10, lat2: 34.40, lng1: 135.10, lng2: 135.60 } },
-    { name: '和歌山県南部', bbox: { lat1: 33.50, lat2: 34.10, lng1: 135.40, lng2: 135.90 } },
-    { name: '鳥取県東部', bbox: { lat1: 35.30, lat2: 35.60, lng1: 134.10, lng2: 134.45 } },
-    { name: '鳥取県中部', bbox: { lat1: 35.30, lat2: 35.60, lng1: 133.80, lng2: 134.10 } },
-    { name: '鳥取県西部', bbox: { lat1: 35.30, lat2: 35.60, lng1: 133.20, lng2: 133.80 } },
-    { name: '島根県東部', bbox: { lat1: 35.20, lat2: 35.50, lng1: 132.60, lng2: 133.20 } },
-    { name: '島根県西部', bbox: { lat1: 34.90, lat2: 35.40, lng1: 131.50, lng2: 132.60 } },
-    { name: '隠岐', bbox: { lat1: 36.00, lat2: 36.40, lng1: 133.00, lng2: 133.40 } },
-    { name: '岡山県北部', bbox: { lat1: 35.00, lat2: 35.40, lng1: 133.50, lng2: 134.30 } },
-    { name: '広島県南西部', bbox: { lat1: 34.20, lat2: 34.60, lng1: 131.70, lng2: 132.40 } },
-    { name: '山口県東部', bbox: { lat1: 34.00, lat2: 34.40, lng1: 131.60, lng2: 132.10 } },
-    { name: '山口県中部', bbox: { lat1: 34.00, lat2: 34.40, lng1: 131.10, lng2: 131.60 } },
-    { name: '山口県西部', bbox: { lat1: 34.00, lat2: 34.40, lng1: 130.50, lng2: 131.10 } },
-    { name: '徳島県南部', bbox: { lat1: 33.50, lat2: 33.90, lng1: 134.10, lng2: 134.70 } },
-    { name: '香川県東部', bbox: { lat1: 34.10, lat2: 34.40, lng1: 134.10, lng2: 134.40 } },
-    { name: '香川県西部', bbox: { lat1: 34.00, lat2: 34.30, lng1: 133.60, lng2: 134.10 } },
-    { name: '高知県東部', bbox: { lat1: 33.30, lat2: 33.60, lng1: 134.00, lng2: 134.40 } },
-    { name: '高知県中部', bbox: { lat1: 33.30, lat2: 33.70, lng1: 133.40, lng2: 134.00 } },
-    { name: '高知県西部', bbox: { lat1: 32.90, lat2: 33.40, lng1: 132.70, lng2: 133.50 } },
-    { name: '愛媛県中予', bbox: { lat1: 33.70, lat2: 33.95, lng1: 132.50, lng2: 132.90 } },
-    { name: '福岡県北九州', bbox: { lat1: 33.70, lat2: 33.95, lng1: 130.85, lng2: 131.10 } },
-    { name: '長崎県南西部', bbox: { lat1: 32.50, lat2: 33.10, lng1: 129.50, lng2: 129.90 } },
-    { name: '熊本県天草・芦北', bbox: { lat1: 32.20, lat2: 32.70, lng1: 130.00, lng2: 130.70 } },
-    { name: '熊本県球磨', bbox: { lat1: 32.10, lat2: 32.40, lng1: 130.60, lng2: 131.10 } },
-    { name: '熊本県熊本地方', bbox: { lat1: 32.60, lat2: 33.00, lng1: 130.50, lng2: 130.90 } },
-    { name: '大分県北部', bbox: { lat1: 33.30, lat2: 33.70, lng1: 131.10, lng2: 131.70 } },
-    { name: '大分県南部', bbox: { lat1: 32.90, lat2: 33.30, lng1: 131.40, lng2: 131.90 } },
-    { name: '宮崎県北部山沿い', bbox: { lat1: 32.40, lat2: 32.90, lng1: 131.00, lng2: 131.60 } },
-    { name: '宮崎県南部山沿い', bbox: { lat1: 31.60, lat2: 32.30, lng1: 130.90, lng2: 131.50 } },
-    { name: '宮崎県南部平野部', bbox: { lat1: 31.60, lat2: 32.10, lng1: 131.30, lng2: 131.60 } },
-    { name: '鹿児島県大隅', bbox: { lat1: 30.90, lat2: 31.60, lng1: 130.90, lng2: 131.50 } },
+  // --- 首都圏（重なり回避のため23区を先） ---
+  { name: '東京都23区',    bbox: { lat1: 35.560, lat2: 35.820, lng1: 139.560, lng2: 139.920 } }, // 板橋区等を確実に包含
+  { name: '東京都多摩東部', bbox: { lat1: 35.60,  lat2: 35.82,  lng1: 139.30,  lng2: 139.60 } },
+  { name: '東京都多摩西部', bbox: { lat1: 35.35,  lat2: 35.80,  lng1: 138.90,  lng2: 139.30 } },
+  // ★埼玉南部の下限を上げ、23区との重なりを解消
+  { name: '埼玉県南部',    bbox: { lat1: 35.820, lat2: 36.000, lng1: 139.200, lng2: 139.900 } },
+  { name: '埼玉県北部',    bbox: { lat1: 36.000, lat2: 36.320, lng1: 139.200, lng2: 139.700 } },
 
-    // --- 海域（太平洋側） ---
-    { name: '日本海溝', basin: '太平洋', bbox: { lat1: 36.0, lat2: 41.5, lng1: 142.0, lng2: 146.0 } },
-    { name: '房総沖', basin: '太平洋', bbox: { lat1: 34.8, lat2: 35.9, lng1: 140.6, lng2: 142.4 } },
-    { name: '相模トラフ', basin: '太平洋', bbox: { lat1: 34.6, lat2: 35.3, lng1: 139.0, lng2: 140.0 } },
-    { name: '駿河トラフ', basin: '太平洋', bbox: { lat1: 34.4, lat2: 35.1, lng1: 138.3, lng2: 138.9 } },
-    { name: '南海トラフ', basin: '太平洋', bbox: { lat1: 32.0, lat2: 34.5, lng1: 135.0, lng2: 138.5 } },
-  ];
+  // --- 茨城（内陸の東端を内側へ：海を拾わない） ---
+  { name: '茨城県北部',    bbox: { lat1: 36.60,  lat2: 36.95,  lng1: 139.90,  lng2: 140.45 } },
+  { name: '茨城県南部',    bbox: { lat1: 35.85,  lat2: 36.60,  lng1: 139.70,  lng2: 140.45 } },
+
+  // --- 千葉・神奈川 ---
+  { name: '千葉県北西部',  bbox: { lat1: 35.55,  lat2: 35.92,  lng1: 139.80,  lng2: 140.15 } }, // 東京湾沿いの海を含まない
+  { name: '千葉県南部',    bbox: { lat1: 34.90,  lat2: 35.55,  lng1: 139.80,  lng2: 140.35 } },
+  { name: '神奈川県東部',  bbox: { lat1: 35.28,  lat2: 35.63,  lng1: 139.50,  lng2: 139.82 } },
+  { name: '神奈川県西部',  bbox: { lat1: 35.20,  lat2: 35.60,  lng1: 139.00,  lng2: 139.50 } },
+
+  // --- 栃木・群馬・山梨・長野 ---
+  { name: '栃木県北部',    bbox: { lat1: 36.70,  lat2: 37.30,  lng1: 139.30,  lng2: 140.40 } },
+  { name: '栃木県南部',    bbox: { lat1: 36.20,  lat2: 36.70,  lng1: 139.30,  lng2: 140.40 } },
+  { name: '群馬県北部',    bbox: { lat1: 36.65,  lat2: 36.95,  lng1: 138.60,  lng2: 139.40 } },
+  { name: '群馬県南部',    bbox: { lat1: 36.20,  lat2: 36.65,  lng1: 138.60,  lng2: 139.60 } },
+  { name: '山梨県中・西部', bbox: { lat1: 35.30,  lat2: 35.90,  lng1: 138.20,  lng2: 138.90 } },
+  { name: '長野県北部',    bbox: { lat1: 36.50,  lat2: 37.00,  lng1: 137.60,  lng2: 138.60 } },
+  { name: '長野県南部',    bbox: { lat1: 35.20,  lat2: 36.50,  lng1: 137.40,  lng2: 138.60 } },
+
+  // --- 北海道・周辺（内陸系） ---
+  { name: '北海道道北',    bbox: { lat1: 44.00,  lat2: 45.80,  lng1: 141.00,  lng2: 142.80 } },
+  { name: '北海道道東',    bbox: { lat1: 43.00,  lat2: 45.80,  lng1: 143.00,  lng2: 146.50 } },
+  { name: '北海道道央',    bbox: { lat1: 42.30,  lat2: 43.80,  lng1: 140.70,  lng2: 143.00 } },
+  { name: '北海道道南',    bbox: { lat1: 41.20,  lat2: 42.40,  lng1: 140.20,  lng2: 141.60 } },
+  { name: '石狩湾',        bbox: { lat1: 43.00,  lat2: 43.70,  lng1: 141.00,  lng2: 141.70 } },
+
+  // --- 東北（内陸系） ---
+  { name: '青森県北部',    bbox: { lat1: 40.90,  lat2: 41.50,  lng1: 140.60,  lng2: 141.40 } },
+  { name: '青森県南部',    bbox: { lat1: 40.20,  lat2: 40.90,  lng1: 140.60,  lng2: 141.60 } },
+  { name: '岩手県内陸北部', bbox:{ lat1: 39.70,  lat2: 40.40,  lng1: 141.00,  lng2: 141.90 } },
+  { name: '岩手県内陸南部', bbox:{ lat1: 38.90,  lat2: 39.70,  lng1: 140.80,  lng2: 141.90 } },
+  { name: '宮城県北部',    bbox: { lat1: 38.60,  lat2: 39.20,  lng1: 140.70,  lng2: 141.60 } },
+  { name: '宮城県南部',    bbox: { lat1: 38.00,  lat2: 38.60,  lng1: 140.50,  lng2: 141.60 } },
+  { name: '秋田県内陸北部', bbox:{ lat1: 39.90,  lat2: 40.60,  lng1: 140.10,  lng2: 140.80 } },
+  { name: '秋田県内陸南部', bbox:{ lat1: 39.10,  lat2: 39.90,  lng1: 140.00,  lng2: 140.80 } },
+  { name: '山形県村山',    bbox: { lat1: 38.20,  lat2: 38.70,  lng1: 140.10,  lng2: 140.60 } },
+  { name: '山形県置賜',    bbox: { lat1: 37.80,  lat2: 38.30,  lng1: 139.90,  lng2: 140.60 } },
+  { name: '福島県中通り',  bbox: { lat1: 37.10,  lat2: 37.90,  lng1: 139.40,  lng2: 140.70 } },
+  { name: '福島県浜通り',  bbox: { lat1: 36.80,  lat2: 37.90,  lng1: 140.60,  lng2: 141.20 } },
+  { name: '福島県会津',    bbox: { lat1: 37.10,  lat2: 37.90,  lng1: 139.20,  lng2: 139.90 } },
+
+  // --- 東海・北陸・近畿（内陸系） ---
+  { name: '静岡県中部',    bbox: { lat1: 34.80,  lat2: 35.10,  lng1: 138.20,  lng2: 138.50 } },
+  { name: '静岡県東部',    bbox: { lat1: 34.80,  lat2: 35.20,  lng1: 138.70,  lng2: 139.20 } },
+  { name: '静岡県西部',    bbox: { lat1: 34.60,  lat2: 34.90,  lng1: 137.60,  lng2: 138.20 } },
+  { name: '愛知県西部',    bbox: { lat1: 34.70,  lat2: 35.30,  lng1: 136.70,  lng2: 137.20 } },
+  { name: '愛知県東部',    bbox: { lat1: 34.80,  lat2: 35.20,  lng1: 137.20,  lng2: 137.80 } },
+  { name: '三重県北部',    bbox: { lat1: 34.70,  lat2: 35.20,  lng1: 136.20,  lng2: 136.80 } },
+  { name: '三重県中部',    bbox: { lat1: 34.40,  lat2: 34.90,  lng1: 136.30,  lng2: 136.80 } },
+  { name: '三重県南部',    bbox: { lat1: 33.70,  lat2: 34.40,  lng1: 136.00,  lng2: 136.90 } },
+  { name: '石川県能登',    bbox: { lat1: 37.10,  lat2: 37.60,  lng1: 136.70,  lng2: 137.50 } },
+  { name: '石川県加賀',    bbox: { lat1: 36.10,  lat2: 36.60,  lng1: 136.30,  lng2: 136.80 } },
+  { name: '富山県東部',    bbox: { lat1: 36.50,  lat2: 36.90,  lng1: 137.40,  lng2: 137.80 } },
+  { name: '富山県西部',    bbox: { lat1: 36.50,  lat2: 36.90,  lng1: 136.90,  lng2: 137.40 } },
+  { name: '新潟県上越',    bbox: { lat1: 36.70,  lat2: 37.40,  lng1: 137.80,  lng2: 138.70 } },
+  { name: '新潟県中越',    bbox: { lat1: 37.10,  lat2: 37.60,  lng1: 138.50,  lng2: 139.30 } },
+  { name: '新潟県下越',    bbox: { lat1: 37.60,  lat2: 38.20,  lng1: 139.20,  lng2: 139.70 } },
+  { name: '福井県嶺北',    bbox: { lat1: 35.70,  lat2: 36.20,  lng1: 136.00,  lng2: 136.80 } },
+  { name: '福井県嶺南',    bbox: { lat1: 35.30,  lat2: 35.70,  lng1: 135.60,  lng2: 136.30 } },
+  { name: '滋賀県北部',    bbox: { lat1: 35.30,  lat2: 35.70,  lng1: 135.90,  lng2: 136.40 } },
+  { name: '滋賀県南部',    bbox: { lat1: 34.90,  lat2: 35.30,  lng1: 135.80,  lng2: 136.30 } },
+  { name: '京都府北部',    bbox: { lat1: 35.30,  lat2: 35.70,  lng1: 135.10,  lng2: 135.80 } },
+  { name: '京都府南部',    bbox: { lat1: 34.80,  lat2: 35.20,  lng1: 135.50,  lng2: 136.10 } },
+  { name: '大阪府北部',    bbox: { lat1: 34.70,  lat2: 34.92,  lng1: 135.40,  lng2: 135.70 } },
+  { name: '大阪府南部',    bbox: { lat1: 34.30,  lat2: 34.72,  lng1: 135.45,  lng2: 135.70 } },
+  { name: '大阪湾',        bbox: { lat1: 34.25,  lat2: 34.70,  lng1: 135.00,  lng2: 135.50 } },
+  { name: '兵庫県北部',    bbox: { lat1: 35.10,  lat2: 35.70,  lng1: 134.60,  lng2: 135.20 } },
+  { name: '兵庫県南東部',  bbox: { lat1: 34.60,  lat2: 34.90,  lng1: 135.00,  lng2: 135.40 } },
+  { name: '兵庫県南西部',  bbox: { lat1: 34.60,  lat2: 35.00,  lng1: 134.60,  lng2: 135.00 } },
+  { name: '奈良県北部',    bbox: { lat1: 34.50,  lat2: 34.80,  lng1: 135.60,  lng2: 136.10 } },
+  { name: '奈良県南部',    bbox: { lat1: 33.90,  lat2: 34.50,  lng1: 135.60,  lng2: 136.20 } },
+  { name: '和歌山県北部',  bbox: { lat1: 34.10,  lat2: 34.40,  lng1: 135.10,  lng2: 135.60 } },
+  { name: '和歌山県南部',  bbox: { lat1: 33.50,  lat2: 34.10,  lng1: 135.40,  lng2: 135.90 } },
+
+  // --- 中国・四国・九州（内陸系） ---
+  { name: '鳥取県東部',    bbox: { lat1: 35.30,  lat2: 35.60,  lng1: 134.10,  lng2: 134.45 } },
+  { name: '鳥取県中部',    bbox: { lat1: 35.30,  lat2: 35.60,  lng1: 133.80,  lng2: 134.10 } },
+  { name: '鳥取県西部',    bbox: { lat1: 35.30,  lat2: 35.60,  lng1: 133.20,  lng2: 133.80 } },
+  { name: '島根県東部',    bbox: { lat1: 35.20,  lat2: 35.50,  lng1: 132.60,  lng2: 133.20 } },
+  { name: '島根県西部',    bbox: { lat1: 34.90,  lat2: 35.40,  lng1: 131.50,  lng2: 132.60 } },
+  { name: '隠岐',          bbox: { lat1: 36.00,  lat2: 36.40,  lng1: 133.00,  lng2: 133.40 } },
+  { name: '岡山県南部',    bbox: { lat1: 34.40,  lat2: 34.90,  lng1: 133.60,  lng2: 134.20 } },
+  { name: '岡山県北部',    bbox: { lat1: 35.00,  lat2: 35.40,  lng1: 133.50,  lng2: 134.30 } },
+  { name: '広島県南東部',  bbox: { lat1: 34.20,  lat2: 34.60,  lng1: 132.40,  lng2: 133.20 } },
+  { name: '広島県南西部',  bbox: { lat1: 34.20,  lat2: 34.60,  lng1: 131.70,  lng2: 132.40 } },
+  { name: '山口県東部',    bbox: { lat1: 34.00,  lat2: 34.40,  lng1: 131.60,  lng2: 132.10 } },
+  { name: '山口県中部',    bbox: { lat1: 34.00,  lat2: 34.40,  lng1: 131.10,  lng2: 131.60 } },
+  { name: '山口県西部',    bbox: { lat1: 34.00,  lat2: 34.40,  lng1: 130.50,  lng2: 131.10 } },
+  { name: '徳島県北部',    bbox: { lat1: 33.90,  lat2: 34.20,  lng1: 134.10,  lng2: 134.60 } },
+  { name: '徳島県南部',    bbox: { lat1: 33.50,  lat2: 33.90,  lng1: 134.10,  lng2: 134.70 } },
+  { name: '香川県',        bbox: { lat1: 34.00,  lat2: 34.40,  lng1: 133.60,  lng2: 134.40 } },
+  { name: '香川県東部',    bbox: { lat1: 34.10,  lat2: 34.40,  lng1: 134.10,  lng2: 134.40 } },
+  { name: '香川県西部',    bbox: { lat1: 34.00,  lat2: 34.30,  lng1: 133.60,  lng2: 134.10 } },
+  { name: '愛媛県東予',    bbox: { lat1: 33.80,  lat2: 34.10,  lng1: 133.00,  lng2: 133.60 } },
+  { name: '愛媛県中予',    bbox: { lat1: 33.70,  lat2: 33.95,  lng1: 132.50,  lng2: 132.90 } },
+  { name: '愛媛県南予',    bbox: { lat1: 32.80,  lat2: 33.60,  lng1: 132.30,  lng2: 132.90 } },
+  { name: '高知県東部',    bbox: { lat1: 33.30,  lat2: 33.60,  lng1: 134.00,  lng2: 134.40 } },
+  { name: '高知県中部',    bbox: { lat1: 33.30,  lat2: 33.70,  lng1: 133.40,  lng2: 134.00 } },
+  { name: '高知県西部',    bbox: { lat1: 32.90,  lat2: 33.40,  lng1: 132.70,  lng2: 133.50 } },
+  { name: '福岡県',        bbox: { lat1: 33.30,  lat2: 33.90,  lng1: 130.20,  lng2: 130.70 } },
+  { name: '福岡県北九州',  bbox: { lat1: 33.70,  lat2: 33.95,  lng1: 130.85,  lng2: 131.10 } },
+  { name: '佐賀県',        bbox: { lat1: 33.00,  lat2: 33.50,  lng1: 129.80,  lng2: 130.40 } },
+  { name: '長崎県北部',    bbox: { lat1: 33.00,  lat2: 33.40,  lng1: 129.50,  lng2: 130.20 } },
+  { name: '長崎県南西部',  bbox: { lat1: 32.50,  lat2: 33.10,  lng1: 129.50,  lng2: 129.90 } },
+  { name: '熊本県熊本地方', bbox:{ lat1: 32.60,  lat2: 33.00,  lng1: 130.50,  lng2: 130.90 } },
+  { name: '熊本県天草・芦北', bbox:{ lat1: 32.20, lat2: 32.70,  lng1: 130.00,  lng2: 130.70 } },
+  { name: '熊本県球磨',    bbox: { lat1: 32.10,  lat2: 32.40,  lng1: 130.60,  lng2: 131.10 } },
+  { name: '大分県北部',    bbox: { lat1: 33.30,  lat2: 33.70,  lng1: 131.10,  lng2: 131.70 } },
+  { name: '大分県中部',    bbox: { lat1: 33.00,  lat2: 33.40,  lng1: 131.40,  lng2: 131.80 } },
+  { name: '大分県南部',    bbox: { lat1: 32.90,  lat2: 33.30,  lng1: 131.40,  lng2: 131.90 } },
+  { name: '宮崎県北部平野部', bbox:{ lat1: 32.10, lat2: 32.60, lng1: 131.40, lng2: 131.70 } },
+  { name: '宮崎県北部山沿い', bbox:{ lat1: 32.40, lat2: 32.90, lng1: 131.00, lng2: 131.60 } },
+  { name: '宮崎県南部平野部', bbox:{ lat1: 31.60, lat2: 32.10, lng1: 131.30, lng2: 131.60 } },
+  { name: '宮崎県南部山沿い', bbox:{ lat1: 31.60, lat2: 32.30, lng1: 130.90, lng2: 131.50 } },
+  { name: '鹿児島県薩摩',  bbox: { lat1: 31.10,  lat2: 31.90,  lng1: 130.20,  lng2: 130.90 } },
+  { name: '鹿児島県大隅',  bbox: { lat1: 30.90,  lat2: 31.60,  lng1: 130.90,  lng2: 131.50 } },
+  { name: '鹿児島湾',      bbox: { lat1: 31.20,  lat2: 31.62,  lng1: 130.50,  lng2: 130.80 } },
+  { name: '種子島近海',    bbox: { lat1: 30.10,  lat2: 30.80,  lng1: 130.50,  lng2: 131.20 } },
+  { name: '屋久島近海',    bbox: { lat1: 30.10,  lat2: 30.60,  lng1: 130.90,  lng2: 131.60 } },
+  { name: '奄美大島近海',  bbox: { lat1: 27.50,  lat2: 28.80,  lng1: 128.30,  lng2: 130.00 } },
+  { name: 'トカラ列島近海',    bbox: { lat1: 28.00,  lat2: 28.50,  lng1: 129.60,  lng2: 130.00 } },
+  { name: '徳之島近海',    bbox: { lat1: 27.60,  lat2: 28.10,  lng1: 128.80,  lng2: 129.30 } },
+  { name: '沖永良部島近海', bbox:{ lat1: 27.20,  lat2: 27.60,  lng1: 128.50,  lng2: 129.00 } },
+  { name: '与論島近海',    bbox: { lat1: 27.00,  lat2: 27.20,  lng1: 128.90,  lng2: 129.20 } },
+
+  // ====== 東アジア外縁（図の外枠相当） ======
+  { name: '台湾付近',         bbox: { lat1: 22.50, lat2: 25.50, lng1: 120.50, lng2: 122.50 } },
+  { name: '黄海',             basin: '東シナ海', bbox: { lat1: 33.00, lat2: 37.00, lng1: 123.00, lng2: 126.00 } },
+  { name: '朝鮮半島南部',     bbox: { lat1: 34.00, lat2: 37.00, lng1: 126.00, lng2: 129.00 } },
+  { name: '朝鮮半島北部',     bbox: { lat1: 38.00, lat2: 41.00, lng1: 125.00, lng2: 130.00 } },
+  { name: '中国東北部',       bbox: { lat1: 41.00, lat2: 46.00, lng1: 122.00, lng2: 127.00 } },
+  { name: 'ウラジオストク付近', bbox:{ lat1: 42.00, lat2: 44.00, lng1: 130.50, lng2: 133.00 } },
+  { name: 'シベリア南部',     bbox: { lat1: 47.00, lat2: 53.00, lng1: 125.00, lng2: 140.00 } },
+  { name: 'フィリピン海北部',  basin: '太平洋', bbox: { lat1: 19.50, lat2: 23.50, lng1: 130.00, lng2: 142.00 } },
+  { name: 'マリアナ諸島',     basin: '太平洋', bbox: { lat1: 12.00, lat2: 20.00, lng1: 140.00, lng2: 147.00 } },
+];
 
   function inBBox(lat, lng, bb) {
     return lat >= bb.lat1 && lat <= bb.lat2 && lng >= bb.lng1 && lng <= bb.lng2;
@@ -2149,123 +2334,314 @@ body[data-theme="light"] .section .content::-webkit-scrollbar-track{ background:
     return best || '不明';
   }
 
-  /* ------------------------------------------------------------
-   * Add epicenters / stations
-   * ---------------------------------------------------------- */
-  function addEpicAt(lat, lng) {
-    if (epicenters.length >= 5) { showOverlay('上限', '震源は最大5つまで。'); return; }
-    const M = clampMag(parseFloat(inMag?.value));
-    const depth = clampDepth(parseFloat(inDepth?.value));
-    const el = document.createElement('div'); el.className = 'epi-dot';
-    const marker = L.marker([lat, lng], { draggable: !running, icon: L.divIcon({ html: el, className: '', iconSize: [18, 18] }) }).addTo(map);
-    const region = nameEpicentralRegion(lat, lng);
-    marker.bindTooltip(`M${M.toFixed(1)} / ${depth.toFixed(1)}km\n${region}`, { direction: 'top', offset: [0, -16] });
 
-    const epi = { id: 'e' + Date.now() + Math.random(), lat, lng, M, depth, marker, pCircle: null, sCircle: null, tCircle: null, _moved: true, region };
-    marker.on('dragend', () => {
-      if (running) { marker.setLatLng([epi.lat, epi.lng]); return; } // ロック
-      const ll = marker.getLatLng();
-      epi.lat = ll.lat; epi.lng = ll.lng; epi._moved = true;
-      epi.region = nameEpicentralRegion(epi.lat, epi.lng);
-      marker.closeTooltip(); marker.bindTooltip(`M${epi.M.toFixed(1)} / ${epi.depth.toFixed(1)}km\n${epi.region}`);
-      computePredictions();
-    });
-    marker.on('click', () => {
-      if (running || getMode() !== 'TOOL') return;
-      const nm = parseFloat(prompt('M?', epi.M));
-      const dp = parseFloat(prompt('深さ(km)?', epi.depth));
-      if (!isNaN(nm)) epi.M = clampMag(nm);
-      if (!isNaN(dp)) epi.depth = clampDepth(dp);
-      epi.region = nameEpicentralRegion(epi.lat, epi.lng);
-      marker.closeTooltip(); marker.bindTooltip(`M${epi.M.toFixed(1)} / ${epi.depth.toFixed(1)}km\n${epi.region}`);
-      computePredictions();
-    });
+/* ------------------------------------------------------------
+ * Add epicenters / stations （丸ごと置き換え）
+ * ---------------------------------------------------------- */
+function addEpicAt(lat, lng) {
+  if (epicenters.length >= 5) { showOverlay('上限', '震源は最大5つまで。'); return; }
+  const M = clampMag(parseFloat(inMag?.value));
+  const depth = clampDepth(parseFloat(inDepth?.value));
+  const el = document.createElement('div'); el.className = 'epi-dot';
+  const marker = L.marker([lat, lng], { draggable: !running, icon: L.divIcon({ html: el, className: '', iconSize: [18, 18] }) }).addTo(map);
+  const region = nameEpicentralRegion(lat, lng);
+  marker.bindTooltip(`M${M.toFixed(1)} / ${depth.toFixed(1)}km\n${region}`, { direction: 'top', offset: [0, -16] });
 
-    epicenters.push(epi);
-    refreshEpicList();
+  const epi = { id: 'e' + Date.now() + Math.random(), lat, lng, M, depth, marker, pCircle: null, sCircle: null, tCircle: null, _moved: true, region };
+  marker.on('dragend', () => {
+    if (running) { marker.setLatLng([epi.lat, epi.lng]); return; }
+    const ll = marker.getLatLng();
+    epi.lat = ll.lat; epi.lng = ll.lng; epi._moved = true;
+    epi.region = nameEpicentralRegion(epi.lat, epi.lng);
+    marker.closeTooltip(); marker.bindTooltip(`M${epi.M.toFixed(1)} / ${epi.depth.toFixed(1)}km\n${epi.region}`);
     computePredictions();
+  });
+  marker.on('click', () => {
+    if (running || getMode() !== 'TOOL') return;
+    const nm = parseFloat(prompt('M?', epi.M));
+    const dp = parseFloat(prompt('深さ(km)?', epi.depth));
+    if (!isNaN(nm)) epi.M = clampMag(nm);
+    if (!isNaN(dp)) epi.depth = clampDepth(dp);
+    epi.region = nameEpicentralRegion(epi.lat, epi.lng);
+    marker.closeTooltip(); marker.bindTooltip(`M${epi.M.toFixed(1)} / ${epi.depth.toFixed(1)}km\n${epi.region}`);
+    computePredictions();
+  });
+
+  epicenters.push(epi);
+  refreshEpicList();
+  computePredictions();
+}
+
+function addStationAt(lat, lng, name, showLabel = true, isMajor = false) {
+  function makeStationHTML(label, countdown, small = false) {
+    const sizeClass = small ? 'station-dot-small' : 'station-dot';
+    return `
+      <div class="station-wrap">
+        <div class="${sizeClass}"></div>
+        ${countdown ? `<div class="countdown-pill">${countdown}</div>` : ''}
+        ${label ? `<div class="station-label">${label}</div>` : ''}
+      </div>
+    `;
   }
 
-  function addStationAt(lat, lng, name, showLabel = true, isMajor = false) {
-    const icon = L.divIcon({ html: stationIconHTML(''), className: '', iconSize: [34, 34] });
-    const marker = L.marker([lat, lng], { draggable: !running, icon }).addTo(map);
-    const countdown = L.marker([lat, lng], { icon: L.divIcon({ html: makeCountdownHTML(''), className: '', iconSize: null }), interactive: false }).addTo(map);
-    const st = {
-      id: 's' + Date.now() + Math.random(),
-      lat, lng, name,
-      marker, nameMarker: null, countdownMarker: countdown,
-      pA: false, sA: false, tA: false, pred: null, isMajor, spoken: false,
-      _moved: true, _lastBadge: '', _lastCountLabel: '', visible: true
-    };
-    if (showLabel && name) {
-      st.nameMarker = L.marker([lat, lng], { icon: L.divIcon({ html: makeNameIconHTML(name), className: '', iconSize: null }), interactive: false }).addTo(map);
-    }
-    marker.on('drag', () => {
-      if (running) { marker.setLatLng([st.lat, st.lng]); return; } // ロック
-      const ll = marker.getLatLng();
-      st.lat = ll.lat; st.lng = ll.lng;
-      st.countdownMarker.setLatLng(ll);
-      if (st.nameMarker) st.nameMarker.setLatLng(ll);
-      st._moved = true; canvasDirty = true;
-    });
-    marker.on('dragend', () => computePredictions());
-    marker.on('click', () => {
-      if (running || getMode() !== 'TOOL') return;
-      const nm = prompt('観測点名', st.name || '');
-      if (nm === null) return;
-      st.name = nm.trim();
-      if (st.name) {
-        if (!st.nameMarker) {
-          st.nameMarker = L.marker([st.lat, st.lng], { icon: L.divIcon({ html: makeNameIconHTML(st.name), className: '', iconSize: null }), interactive: false }).addTo(map);
-        } else {
-          st.nameMarker.setIcon(L.divIcon({ html: makeNameIconHTML(st.name), className: '', iconSize: null }));
-        }
-      } else {
-        if (st.nameMarker) { map.removeLayer(st.nameMarker); st.nameMarker = null; }
-      }
-      refreshStList(); canvasDirty = true;
-    });
+  const icon = L.divIcon({
+    html: makeStationHTML(showLabel && name ? name : '', '', false),
+    className: '',
+    iconSize: [40, 40]
+  });
 
-    stations.push(st);
+  const marker = L.marker([lat, lng], { draggable: !running, icon }).addTo(map);
+
+  const st = {
+    id: 's' + Date.now() + Math.random(),
+    lat, lng, name,
+    marker,
+    isMajor,
+    spoken: false,
+    _moved: true,
+    visible: true,
+    countdown: '',
+    smallMode: false
+  };
+
+  marker.on('drag', () => {
+    if (running) { marker.setLatLng([st.lat, st.lng]); return; }
+    const ll = marker.getLatLng();
+    st.lat = ll.lat;
+    st.lng = ll.lng;
+    st._moved = true;
+    canvasDirty = true;
+  });
+  marker.on('dragend', () => computePredictions());
+
+  marker.on('click', () => {
+    if (running || getMode() !== 'TOOL') return;
+    const nm = prompt('観測点名', st.name || '');
+    if (nm === null) return;
+    st.name = nm.trim();
+    marker.setIcon(L.divIcon({
+      html: makeStationHTML(st.name || '', st.countdown, st.smallMode),
+      className: '',
+      iconSize: [40, 40]
+    }));
     refreshStList();
-    computePredictions();
-    updateCanvasAutoToggle();
-  }
+    canvasDirty = true;
+  });
 
-  // 初期観測点（主要都市＋那覇）
-  function preloadStations() {
-    const major = [
-      { name: '札幌', lat: 43.0618, lng: 141.3545 },
-      { name: '仙台', lat: 38.2688, lng: 140.8721 },
-      { name: '東京', lat: 35.6812, lng: 139.7671 },
-      { name: '横浜', lat: 35.4437, lng: 139.6380 },
-      { name: '千葉', lat: 35.6073, lng: 140.1063 },
-      { name: 'さいたま', lat: 35.8617, lng: 139.6455 },
-      { name: '川崎', lat: 35.53, lng: 139.7036 },
-      { name: '静岡', lat: 34.971, lng: 138.3889 },
-      { name: '名古屋', lat: 35.1815, lng: 136.9066 },
-      { name: '京都', lat: 35.0116, lng: 135.7681 },
-      { name: '大阪', lat: 34.6937, lng: 135.5023 },
-      { name: '神戸', lat: 34.6901, lng: 135.1955 },
-      { name: '広島', lat: 34.3853, lng: 132.4553 },
-      { name: '岡山', lat: 34.6551, lng: 133.9195 },
-      { name: '福岡', lat: 33.5902, lng: 130.4017 },
-      { name: '北九州', lat: 33.883, lng: 130.8753 },
-      { name: '熊本', lat: 32.8031, lng: 130.7079 },
-      { name: '那覇', lat: 26.2125, lng: 127.6811 } // 主要都市に追加
-    ];
-    major.forEach(c => addStationAt(c.lat, c.lng, c.name, true, true));
+  stations.push(st);
+  refreshStList();
+  updateCanvasAutoToggle?.();
 
-    const extra = [
-      { lat: 41.7687, lng: 140.7288 }, { lat: 40.822, lng: 140.7473 }, { lat: 39.7199, lng: 140.1024 },
-      { lat: 37.9161, lng: 139.0364 }, { lat: 36.5613, lng: 136.6562 }, { lat: 36.6513, lng: 138.1809 },
-      { lat: 35.4233, lng: 136.7607 }, { lat: 34.6851, lng: 135.8327 }, { lat: 34.226, lng: 135.1675 },
-      { lat: 33.8416, lng: 132.7661 }, { lat: 33.5597, lng: 133.5311 }, { lat: 34.0703, lng: 134.5548 },
-      { lat: 35.5039, lng: 134.2377 }, { lat: 35.4723, lng: 133.0505 }, { lat: 33.2396, lng: 131.6093 },
-      { lat: 31.9077, lng: 131.4202 }, { lat: 31.5966, lng: 130.5571 }
-    ];
-    extra.forEach(p => addStationAt(p.lat, p.lng, '', false, false));
+  document.addEventListener('quakeSimStart', () => {
+    st.smallMode = true;
+    marker.setIcon(L.divIcon({
+      html: makeStationHTML(st.name || '', st.countdown, true),
+      className: '',
+      iconSize: [20, 20]
+    }));
+  });
+  document.addEventListener('quakeSimStop', () => {
+    st.smallMode = false;
+    marker.setIcon(L.divIcon({
+      html: makeStationHTML(st.name || '', st.countdown, false),
+      className: '',
+      iconSize: [40, 40]
+    }));
+  });
+}
+
+/* ---------- ここから追加：重複回避・大量配置ユーティリティ ---------- */
+
+// 近傍重複チェック（km）
+function existsNear(lat, lng, km = 5) {
+  for (const s of stations) {
+    if (!s.visible) continue;
+    const d = hav(lat, lng, s.lat, s.lng) / 1000;
+    if (d <= km) return true;
   }
+  return false;
+}
+
+// 陸地フィルタ（isLand が未実装なら常に true）
+function passLand(lat, lng) {
+  try { return typeof isLand === 'function' ? !!isLand(lat, lng) : true; } catch { return true; }
+}
+
+// 追加用ヘルパ：重複せず陸上なら add
+function addIfNewLand(lat, lng, name = '', labeled = false, major = false, minDistKm = 5) {
+  if (!passLand(lat, lng)) return false;
+  if (existsNear(lat, lng, minDistKm)) return false;
+  addStationAt(lat, lng, name, labeled && !!name, major);
+  return true;
+}
+
+/* ---------- 基本セット：主要都市（重複は existsNear で回避） ---------- */
+const CORE_MAJOR = [
+  { name: '札幌', lat: 43.0618, lng: 141.3545 },
+  { name: '仙台', lat: 38.2688, lng: 140.8721 },
+  { name: '東京', lat: 35.6812, lng: 139.7671 },
+  { name: '横浜', lat: 35.4437, lng: 139.6380 },
+  { name: '千葉', lat: 35.6073, lng: 140.1063 },
+  { name: 'さいたま', lat: 35.8617, lng: 139.6455 },
+  { name: '川崎', lat: 35.5300, lng: 139.7036 },
+  { name: '静岡', lat: 34.9769, lng: 138.3831 },
+  { name: '名古屋', lat: 35.1815, lng: 136.9066 },
+  { name: '京都', lat: 35.0116, lng: 135.7681 },
+  { name: '大阪', lat: 34.6937, lng: 135.5023 },
+  { name: '神戸', lat: 34.6901, lng: 135.1955 },
+  { name: '広島', lat: 34.3853, lng: 132.4553 },
+  { name: '岡山', lat: 34.6551, lng: 133.9195 },
+  { name: '福岡', lat: 33.5902, lng: 130.4017 },
+  { name: '北九州', lat: 33.8830, lng: 130.8753 },
+  { name: '熊本', lat: 32.8031, lng: 130.7079 },
+  { name: '那覇', lat: 26.2125, lng: 127.6811 }
+];
+
+/* ---------- 47都道府県庁所在地（東京は都庁＝新宿区で記載） ---------- */
+const PREF_CAPS = [
+  { name: '札幌', lat: 43.06417, lng: 141.34694 },
+  { name: '青森', lat: 40.82444, lng: 140.74000 },
+  { name: '盛岡', lat: 39.70361, lng: 141.15250 },
+  { name: '仙台', lat: 38.26889, lng: 140.87194 },
+  { name: '秋田', lat: 39.71861, lng: 140.10250 },
+  { name: '山形', lat: 38.24056, lng: 140.36333 },
+  { name: '福島', lat: 37.75000, lng: 140.46778 },
+  { name: '水戸', lat: 36.34139, lng: 140.44667 },
+  { name: '宇都宮', lat: 36.56583, lng: 139.88361 },
+  { name: '前橋', lat: 36.39111, lng: 139.06083 },
+  { name: 'さいたま', lat: 35.85694, lng: 139.64889 },
+  { name: '千葉', lat: 35.60472, lng: 140.12333 },
+  { name: '新宿区', lat: 35.68944, lng: 139.69167 }, // 東京都庁
+  { name: '横浜', lat: 35.44778, lng: 139.64250 },
+  { name: '新潟', lat: 37.90222, lng: 139.02361 },
+  { name: '富山', lat: 36.69528, lng: 137.21139 },
+  { name: '金沢', lat: 36.56111, lng: 136.65639 },
+  { name: '福井', lat: 36.06528, lng: 136.22194 },
+  { name: '甲府', lat: 35.66389, lng: 138.56833 },
+  { name: '長野', lat: 36.65139, lng: 138.18111 },
+  { name: '岐阜', lat: 35.39111, lng: 136.72222 },
+  { name: '静岡', lat: 34.97694, lng: 138.38306 },
+  { name: '名古屋', lat: 35.18147, lng: 136.90641 },
+  { name: '津', lat: 34.73028, lng: 136.50861 },
+  { name: '大津', lat: 35.00444, lng: 135.86833 },
+  { name: '京都', lat: 35.02139, lng: 135.75556 },
+  { name: '大阪', lat: 34.68639, lng: 135.52000 },
+  { name: '神戸', lat: 34.69139, lng: 135.18306 },
+  { name: '奈良', lat: 34.68528, lng: 135.83278 },
+  { name: '和歌山', lat: 34.22611, lng: 135.16750 },
+  { name: '鳥取', lat: 35.50361, lng: 134.23833 },
+  { name: '松江', lat: 35.46806, lng: 133.04861 },
+  { name: '岡山', lat: 34.66167, lng: 133.93500 },
+  { name: '広島', lat: 34.39639, lng: 132.45944 },
+  { name: '山口', lat: 34.18583, lng: 131.47139 },
+  { name: '徳島', lat: 34.06583, lng: 134.55944 },
+  { name: '高松', lat: 34.34028, lng: 134.04333 },
+  { name: '松山', lat: 33.84167, lng: 132.76611 },
+  { name: '高知', lat: 33.55972, lng: 133.53111 },
+  { name: '福岡', lat: 33.59028, lng: 130.40194 },
+  { name: '佐賀', lat: 33.24944, lng: 130.29889 },
+  { name: '長崎', lat: 32.74472, lng: 129.87361 },
+  { name: '熊本', lat: 32.78972, lng: 130.74167 },
+  { name: '大分', lat: 33.23806, lng: 131.61250 },
+  { name: '宮崎', lat: 31.91111, lng: 131.42389 },
+  { name: '鹿児島', lat: 31.56028, lng: 130.55806 },
+  { name: '那覇', lat: 26.21250, lng: 127.68111 }
+];
+
+/* ---------- 主要都市の追加セット（抜粋） ---------- */
+const EXTRA_CITIES = [
+  // 北海道・東北
+  { name: '旭川', lat: 43.7687, lng: 142.3650 }, { name: '函館', lat: 41.7687, lng: 140.7288 },
+  { name: '釧路', lat: 42.9849, lng: 144.3814 }, { name: '帯広', lat: 42.9236, lng: 143.1969 },
+  { name: '苫小牧', lat: 42.6341, lng: 141.6050 }, { name: '小樽', lat: 43.1907, lng: 140.9947 },
+  { name: '室蘭', lat: 42.3152, lng: 140.9737 }, { name: '北見', lat: 43.8031, lng: 143.8950 },
+  { name: '青森市東', lat: 40.8399, lng: 140.8035 }, { name: '八戸', lat: 40.5123, lng: 141.4886 },
+  { name: '弘前', lat: 40.6031, lng: 140.4649 }, { name: '石巻', lat: 38.4345, lng: 141.3027 },
+  { name: '郡山', lat: 37.3983, lng: 140.3845 }, { name: 'いわき', lat: 37.0504, lng: 140.8877 },
+  // 関東周辺
+  { name: '高崎', lat: 36.3219, lng: 139.0033 }, { name: '川越', lat: 35.9081, lng: 139.4856 },
+  { name: '所沢', lat: 35.7921, lng: 139.4690 }, { name: '熊谷', lat: 36.1473, lng: 139.3880 },
+  { name: '柏', lat: 35.8679, lng: 139.9756 }, { name: '船橋', lat: 35.6940, lng: 139.9826 },
+  { name: '市川', lat: 35.7289, lng: 139.9312 }, { name: '松戸', lat: 35.7830, lng: 139.8970 },
+  { name: '八王子', lat: 35.6550, lng: 139.3380 }, { name: '立川', lat: 35.7138, lng: 139.4070 },
+  { name: '町田', lat: 35.5469, lng: 139.4380 }, { name: '横須賀', lat: 35.2810, lng: 139.6722 },
+  { name: '藤沢', lat: 35.3396, lng: 139.4917 }, { name: '平塚', lat: 35.3273, lng: 139.3497 },
+  { name: '相模原', lat: 35.5714, lng: 139.3730 },
+  // 中部
+  { name: '浜松', lat: 34.7108, lng: 137.7261 }, { name: '豊橋', lat: 34.7692, lng: 137.3916 },
+  { name: '岡崎', lat: 34.9546, lng: 137.1706 }, { name: '豊田', lat: 35.0844, lng: 137.1563 },
+  { name: '一宮', lat: 35.3039, lng: 136.8031 }, { name: '長岡', lat: 37.4460, lng: 138.8512 },
+  { name: '甲府南', lat: 35.6200, lng: 138.5680 },
+  // 近畿
+  { name: '堺', lat: 34.5733, lng: 135.4828 }, { name: '東大阪', lat: 34.6794, lng: 135.6000 },
+  { name: '枚方', lat: 34.8143, lng: 135.6500 }, { name: '西宮', lat: 34.7376, lng: 135.3416 },
+  { name: '尼崎', lat: 34.7335, lng: 135.4170 }, { name: '姫路', lat: 34.8151, lng: 134.6853 },
+  { name: '和歌山市北', lat: 34.2650, lng: 135.1800 },
+  // 中国・四国
+  { name: '倉敷', lat: 34.5850, lng: 133.7719 }, { name: '福山', lat: 34.4859, lng: 133.3623 },
+  { name: '呉', lat: 34.2464, lng: 132.5650 }, { name: '下関', lat: 33.9578, lng: 130.9411 },
+  { name: '今治', lat: 34.0667, lng: 132.9978 }, { name: '新居浜', lat: 33.9603, lng: 133.2830 },
+  { name: '丸亀', lat: 34.2902, lng: 133.7984 }, { name: '鳴門', lat: 34.1727, lng: 134.6097 },
+  // 九州・沖縄
+  { name: '久留米', lat: 33.3193, lng: 130.5080 }, { name: '佐世保', lat: 33.1591, lng: 129.7227 },
+  { name: '八代', lat: 32.5074, lng: 130.6010 }, { name: '延岡', lat: 32.5821, lng: 131.6657 },
+  { name: '都城', lat: 31.7196, lng: 131.0615 }, { name: '霧島', lat: 31.7419, lng: 130.7636 },
+  { name: '浦添', lat: 26.2456, lng: 127.7224 }, { name: '沖縄市', lat: 26.3344, lng: 127.8056 }
+];
+
+/* ---------- 無名ポイントを全国に散布（約300点） ---------- */
+function seedExtraStations(count = 300, minDistKm = 6) {
+  const BB = [
+    {lat1:41.2, lat2:45.8, lng1:139.2, lng2:146.0}, // 北海道
+    {lat1:38.0, lat2:40.9, lng1:139.0, lng2:142.2}, // 東北北
+    {lat1:35.0, lat2:38.0, lng1:136.0, lng2:141.5}, // 東北南+関東北
+    {lat1:34.5, lat2:36.8, lng1:138.0, lng2:141.2}, // 関東
+    {lat1:34.0, lat2:37.2, lng1:136.0, lng2:138.8}, // 中部
+    {lat1:34.0, lat2:36.2, lng1:131.0, lng2:135.8}, // 中国
+    {lat1:33.1, lat2:34.8, lng1:133.0, lng2:134.9}, // 四国
+    {lat1:31.0, lat2:33.6, lng1:130.0, lng2:132.2}, // 九州北
+    {lat1:30.0, lat2:32.4, lng1:129.0, lng2:131.2}, // 九州南
+    {lat1:24.0, lat2:27.2, lng1:123.0, lng2:128.6}, // 南西諸島
+  ];
+  let added = 0, guard = 0;
+  while (added < count && guard < count * 40) {
+    guard++;
+    const r = BB[(Math.random() * BB.length) | 0];
+    const lat = r.lat1 + Math.random() * (r.lat2 - r.lat1);
+    const lng = r.lng1 + Math.random() * (r.lng2 - r.lng1);
+    if (!passLand(lat, lng)) continue;
+    if (existsNear(lat, lng, minDistKm)) continue;
+    addStationAt(lat, lng, '', false, false);
+    added++;
+  }
+}
+
+/* ---------- 一括生成（主要都市＋庁所在地＋追加都市＋無名300） ---------- */
+function preloadStations() {
+  // 主要・庁所在地
+  for (const c of CORE_MAJOR) addIfNewLand(c.lat, c.lng, c.name, true, true, 5);
+  for (const c of PREF_CAPS)  addIfNewLand(c.lat, c.lng, c.name, true, true, 5);
+
+  // 主要都市の追加
+  for (const c of EXTRA_CITIES) addIfNewLand(c.lat, c.lng, c.name, true, false, 5);
+
+  // 無名点を散布
+  seedExtraStations(300, 6);
+
+  // 点数が多いのでキャンバス描画を確実にON
+  if (typeof enableCanvasStations === 'function') enableCanvasStations(true);
+  updateCanvasAutoToggle?.();
+  if (typeof canvasDirty !== 'undefined') canvasDirty = true;
+}
+/* --------- 置き換えここまで --------- */
+
+/*
+使い方（initMap 内の流れ例）:
+  heatLayer.addTo(map);
+  preloadStations(); // ← 主要都市＋47都道府県庁所在地＋追加都市＋無名300
+  updateHud();
+*/
+
 
   /* Lists */
   function refreshEpicList() {
@@ -2333,6 +2709,11 @@ body[data-theme="light"] .section .content::-webkit-scrollbar-track{ background:
     setupCircles();
     runStart.disabled = true; runStop.disabled = false; runPause.disabled = false; runResume.disabled = true;
     addLog('SYS', 'シミュレーション開始');
+
+ // 震源ログ
+    epicenters.forEach((e,idx)=>{
+      addLog('SYS', `震源${idx+1} 位置:${e.region||'不明'} / M${e.M.toFixed(1)} / 深さ${e.depth.toFixed(0)}km @ ${e.lat.toFixed(2)},${e.lng.toFixed(2)}`);
+    });
 
     // 震源の自動アナウンス
     unlockByUserGesture();
@@ -2411,7 +2792,13 @@ body[data-theme="light"] .section .content::-webkit-scrollbar-track{ background:
       let best = null;
       epicenters.forEach(e => {
         const at = arrivals(e, s);
-        const pga = estimatePGA(e.M, Math.max(0.5, at.Rkm));
+        const pga = estimatePGA(
+   e.M,
+   Math.max(0.5, at.Rkm),
+   e.depth,
+   e.lat, e.lng,
+   s.lat, s.lng
+ );
         const jma = pgaToJMA(pga);
         const pred = { arrP: at.tP, arrS: at.tS, pga, jma, color: colorForIdx(jma.idx) };
         if (!best || pred.jma.idx > best.jma.idx) best = pred;
@@ -2462,8 +2849,36 @@ body[data-theme="light"] .section .content::-webkit-scrollbar-track{ background:
   }
 
   /* Station UI */
-  function updateStationBadge(st, text) { st.marker.setIcon(L.divIcon({ html: stationIconHTML(text), className: '', iconSize: [34, 34] })); }
-  function updateCountdown(st, txt) { if (!st.countdownMarker) return; st.countdownMarker.setIcon(L.divIcon({ html: makeCountdownHTML(txt || ''), className: '', iconSize: null })); }
+ /* Station UI 軽量化版 */
+
+// 震度バッジ更新（既存要素の中身だけ変更）
+function updateStationBadge(st, text) {
+  if (!st._badgeEl) {
+    // 初回は参照を保存
+    const iconEl = st.marker.getElement();
+    if (iconEl) {
+      st._badgeEl = iconEl.querySelector('.station-dot');
+    }
+  }
+  if (st._badgeEl) {
+    st._badgeEl.innerHTML = text || '';
+  }
+}
+
+// カウントダウン更新（既存要素の中身だけ変更）
+function updateCountdown(st, txt) {
+  if (!st.countdownMarker) return;
+  if (!st._countEl) {
+    const cdEl = st.countdownMarker.getElement();
+    if (cdEl) {
+      st._countEl = cdEl.querySelector('.countdown-pill');
+    }
+  }
+  if (st._countEl) {
+    st._countEl.innerHTML = txt || '';
+  }
+}
+
 
   /* Timeline */
   function updateTimeline() {
@@ -3338,6 +3753,178 @@ body[data-theme="light"] .section .content::-webkit-scrollbar-track{ background:
     setPerfMode(perfModeSel?.value === 'on');
     updateHud();
   });
+
+(function(){
+  const $ = s => document.querySelector(s);
+  const wrap = $('#qsxEpiWrap'), input = $('#qsxEpiInput'), addBtn = $('#qsxEpiAdd'),
+        clearBtn = $('#qsxEpiClear'), sug = $('#qsxEpiSuggest'), sugList = sug.querySelector('ul');
+
+  // --- セーフ初期化（QuakeRegions / 地域配列） ---
+  function readyRegions(){
+    if (!window.QuakeRegions) return null;
+    try { QuakeRegions.buildFixedRegions && QuakeRegions.buildFixedRegions(); } catch(e){}
+    const regs = (QuakeRegions.regions||[]).slice();
+    // _centroid が無ければ計算
+    for (const r of regs) {
+      if (!r._centroid && r._poly) {
+        let la=0, lo=0; for(const p of r._poly){ la+=p[0]; lo+=p[1]; }
+        r._centroid = [la/r._poly.length, lo/r._poly.length];
+      }
+    }
+    return regs;
+  }
+  let REGIONS = readyRegions() || [];
+
+  // --- 正規化 & 検索 ---
+  function norm(s){
+    return (s||'').normalize('NFKC')
+      .replace(/\s+/g,'')
+      .replace(/[ヶヵ]/g,'ケ')
+      .replace(/東京都?23区/g,'東京都23区');
+  }
+  function parseLatLng(s){
+    const m = String(s).match(/^\s*([+-]?\d+(?:\.\d+)?)\s*[, \s]\s*([+-]?\d+(?:\.\d+)?)\s*$/);
+    if(!m) return null;
+    const lat = +m[1], lng = +m[2];
+    if(Number.isFinite(lat) && Number.isFinite(lng)) return [lat,lng];
+    return null;
+  }
+  function scoreMatch(q, name){
+    const nq = norm(q), nn = norm(name);
+    if (nn === nq) return 1000;
+    if (nn.startsWith(nq)) return 800 - nn.length;
+    if (nn.includes(nq)) return 600 - nn.length;
+    if (nq.includes(nn)) return 500 - nn.length;
+    // ざっくりレーベンシュタイン風の甘い近似
+    const d = Math.abs(nn.length - nq.length);
+    return 300 - d*5 - (nn.indexOf(nq[0])>=0?10:50);
+  }
+  function searchRegions(q, limit=12){
+    if (!q) return [];
+    const arr = REGIONS.map(r => [scoreMatch(q, r.name), r])
+      .filter(([sc]) => sc > 250)
+      .sort((a,b)=> b[0]-a[0])
+      .slice(0, limit)
+      .map(x=>x[1]);
+    return arr;
+  }
+
+  // --- サジェスト描画 ---
+  let activeIdx = -1;
+  function renderSuggest(items){
+    if (!items.length){ sug.style.display='none'; sugList.innerHTML=''; activeIdx=-1; return; }
+    sugList.innerHTML = items.map((r,i)=>{
+      const tag = r.basin ? `<span class="qsx-pill">${r.basin}</span>` : `<span class="qsx-pill">内陸</span>`;
+      return `<li data-idx="${i}"><span>${r.name}</span>${tag}</li>`;
+    }).join('');
+    sug.style.display='block';
+    activeIdx = -1;
+  }
+  function currentItems(){
+    return [...sugList.querySelectorAll('li')].map(li=>{
+      const i = +li.getAttribute('data-idx');
+      return { li, region: lastResults[i] };
+    });
+  }
+
+  // --- 震源追加 ---
+  function panTo(lat,lng){
+    try{ if(window.map && map.setView){ map.setView([lat,lng], Math.max(map.getZoom?.()||0, 7)); } }catch(e){}
+  }
+  function addEpic(lat,lng, label){
+    if (typeof window.addEpicAt === 'function'){
+      window.addEpicAt(lat, lng);
+    } else {
+      document.dispatchEvent(new CustomEvent('qsx:add-epic', { detail:{ lat, lng, name:label } }));
+    }
+    panTo(lat,lng);
+  }
+  function addEpicAtRegion(r){
+    const c = r._centroid; if (!c){ toast('地域ポリゴン未初期化'); return; }
+    addEpic(+c[0], +c[1], r.name);
+  }
+
+  // 簡易トースト
+  let toastTid=null;
+  function toast(msg){
+    let el = document.getElementById('qsxToast');
+    if(!el){
+      el = document.createElement('div'); el.id='qsxToast';
+      Object.assign(el.style,{
+        position:'absolute', left:'50%', top:'86px', transform:'translateX(-50%)',
+        zIndex:99999, background:'var(--epi-panel)', color:'var(--epi-text)',
+        padding:'10px 14px', borderRadius:'10px', border:'1px solid var(--epi-border)',
+        boxShadow:'var(--epi-shadow)', pointerEvents:'none'
+      });
+      document.body.appendChild(el);
+    }
+    el.textContent = msg; el.style.opacity='1';
+    clearTimeout(toastTid); toastTid=setTimeout(()=> el.style.opacity='0', 1400);
+  }
+
+  // メイン処理
+  let lastResults = [];
+  function onInput(){
+    const v = input.value.trim();
+    // 緯度経度ならサジェスト閉じ
+    if (parseLatLng(v)){ renderSuggest([]); return; }
+    lastResults = searchRegions(v, 14);
+    renderSuggest(lastResults);
+  }
+  function onAdd(){
+    const v = input.value.trim();
+    const xy = parseLatLng(v);
+    if (xy){ addEpic(xy[0], xy[1], v); return; }
+    const list = lastResults.length ? lastResults : searchRegions(v, 1);
+    if (!list.length){ toast('見つかりません'); return; }
+    addEpicAtRegion(list[0]);
+  }
+  function onClear(){
+    input.value=''; renderSuggest([]); input.focus();
+  }
+
+  // イベント
+  input.addEventListener('input', onInput);
+  input.addEventListener('keydown', e=>{
+    const items = [...sugList.querySelectorAll('li')];
+    if (!items.length) { if(e.key==='Enter') onAdd(); return; }
+    if (e.key === 'ArrowDown'){ activeIdx = Math.min(activeIdx+1, items.length-1); }
+    else if (e.key === 'ArrowUp'){ activeIdx = Math.max(activeIdx-1, 0); }
+    else if (e.key === 'Enter'){
+      if (activeIdx >= 0){ items[activeIdx].click(); return; }
+      onAdd(); return;
+    } else if (e.key === 'Escape'){ renderSuggest([]); return; }
+    items.forEach((li,i)=> li.classList.toggle('active', i===activeIdx));
+  });
+  addBtn.addEventListener('click', onAdd);
+  clearBtn.addEventListener('click', onClear);
+  sug.addEventListener('mousedown', e=>{
+    const li = e.target.closest('li'); if (!li) return;
+    const idx = +li.getAttribute('data-idx');
+    const r = lastResults[idx]; if (!r) return;
+    addEpicAtRegion(r);
+    renderSuggest([]); input.blur();
+  });
+
+  // API: 外部からも呼べるように
+  window.qsxAddEpicByName = function(query){
+    input.value = query||''; onInput(); onAdd();
+  };
+
+  // フェイルセーフ：初期化が早すぎた場合は再取り込み
+  document.addEventListener('readystatechange', () => {
+    if (REGIONS.length === 0 && window.QuakeRegions){
+      const r = readyRegions(); if (r && r.length){ REGIONS = r; }
+    }
+  });
+
+  // デバッグヒント（必要なら一度だけ見える）
+  if (!window.QuakeRegions) {
+    console.warn('[QSX] QuakeRegions が見つかりません。先にエンジン(Part1/2+Part2/2)を読み込んでください。');
+  }
+ });
+
+
 
 })(); // end IIFE
 
