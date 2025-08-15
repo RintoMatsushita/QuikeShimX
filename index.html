@@ -1821,16 +1821,25 @@ function drawStationsCanvas() {
   });
 }
 
-
 /* ------------------------------------------------------------
- * Physics / Prediction（深発対応・異常震域・後方互換）
+ * Physics / Prediction（深発対応 + 異常震域 + 学習補正セーフ + NaN対策）
+ * —— ここを丸ごと置き換え ——
  * ---------------------------------------------------------- */
-function clampMag(x) { return Math.max(-2, Math.min(12, isNaN(x) ? 6.5 : x)); }
-function clampDepth(x) { return Math.max(0.1, Math.min(750, isNaN(x) ? 30 : x)); }
+
+if (typeof window !== 'undefined') {
+  if (typeof window.vp  !== 'number' || !isFinite(window.vp))  window.vp  = 6.0; // km/s
+  if (typeof window.vs  !== 'number' || !isFinite(window.vs))  window.vs  = 3.5; // km/s
+  if (typeof window.dAtt!== 'number' || !isFinite(window.dAtt))window.dAtt= 0.0012;
+}
+
+/* 基本ユーティリティ */
+function clampMag(x)   { return Math.max(-2, Math.min(12, isNaN(x) ? 6.5 : x)); }
+function clampDepth(x) { return Math.max(0.1, Math.min(750, isNaN(x) ? 30  : x)); }
+const _num = x => typeof x === 'number' && isFinite(x);
 
 function stationIconHTML(text = '') { return `<div class="station-dot">${text || ''}</div>`; }
-function makeNameIconHTML(name) { return `<div class="station-label">${name}</div>`; }
-function makeCountdownHTML(txt) { return `<div class="countdown-pill">${txt}</div>`; }
+function makeNameIconHTML(name)     { return `<div class="station-label">${name}</div>`; }
+function makeCountdownHTML(txt)     { return `<div class="countdown-pill">${txt}</div>`; }
 
 function hav(lat1, lng1, lat2, lng2) {
   const R = 6371e3; const toRad = Math.PI / 180;
@@ -1839,26 +1848,27 @@ function hav(lat1, lng1, lat2, lng2) {
   return 2 * R * Math.asin(Math.sqrt(a));
 }
 
-/* ---------- 震度換算（遠方の有感を拾いやすく） ---------- */
-function pgaToJMA(pga) {
-  if (pga > 1.0) return { sh: '7',   idx: 8 };
-  if (pga > 0.75) return { sh: '6強', idx: 7 };
-  if (pga > 0.45) return { sh: '6弱', idx: 6 };
-  if (pga > 0.15) return { sh: '5強', idx: 5 };
-  if (pga > 0.06) return { sh: '5弱', idx: 4 };
-  if (pga > 0.02) return { sh: '4',   idx: 3 };
-  if (pga > 0.01) return { sh: '3',   idx: 2 };
-  if (pga > 0.003) return { sh: '2',  idx: 1 };
-  if (pga > 0.0005) return { sh: '1', idx: 0 }; // ← 0.001 → 0.0005 に緩和
-  return { sh: '', idx: 0 };
+/* 震度換算：必ず '0' 以上を返す */
+function pgaToJMA(pga){
+  if (pga > 1.00)   return { sh:'7',   idx:8 };
+  if (pga > 0.75)   return { sh:'6強', idx:7 };
+  if (pga > 0.45)   return { sh:'6弱', idx:6 };
+  if (pga > 0.15)   return { sh:'5強', idx:5 };
+  if (pga > 0.06)   return { sh:'5弱', idx:4 };
+  if (pga > 0.02)   return { sh:'4',   idx:3 };
+  if (pga > 0.01)   return { sh:'3',   idx:2 };
+  if (pga > 0.003)  return { sh:'2',   idx:1 };
+  if (pga > 0.0005) return { sh:'1',   idx:0 }; // 0.5 Gal
+  return { sh:'', idx:0 };
 }
 
+/* カラー（0..8） */
 function colorForIdx(i) {
   const pal = ['#9ebed6', '#7fc9c9', '#6de0a8', '#f7e86b', '#ffd27a', '#ffb06b', '#ff8a5f', '#ff5a5a', '#c83b3b', '#C0C0C0'];
   return pal[Math.max(0, Math.min(pal.length - 1, i))];
 }
 
-/* ---------- 距離キャッシュ ---------- */
+/* 距離キャッシュ */
 const H_CACHE = new Map(); // key:`e.id:s.id` -> km
 function getHkmCached(e, s) {
   const key = `${e.id}:${s.id}`;
@@ -1869,102 +1879,158 @@ function getHkmCached(e, s) {
 }
 function markAllUnmoved() { epicenters.forEach(e => e._moved = false); stations.forEach(s => s._moved = false); }
 
-/* ---------- 直近コンテキスト（後方互換のため） ---------- */
+/* arrivals() で直近文脈を保存（Rkm/深さ/座標） */
 let __LAST_ARR_CTX = null;
-
-/* ---------- P/S到達時刻 ---------- */
 function arrivals(epi, st) {
   const Hkm = getHkmCached(epi, st);
   const R = Math.sqrt(Hkm * Hkm + epi.depth * epi.depth);
-  // 後方互換: 直近の震源・観測点情報を保持（estimatePGA が2引数でも深さ/方位を参照できる）
-  __LAST_ARR_CTX = {
-    dep: epi.depth, epiLat: epi.lat, epiLng: epi.lng, stLat: st.lat, stLng: st.lng, Rkm: R
-  };
-  return { tP: R / vp, tS: R / vs, Rkm: R, Hkm };
+  __LAST_ARR_CTX = { dep: epi.depth, epiLat: epi.lat, epiLng: epi.lng, stLat: st.lat, stLng: st.lng, Rkm: R };
+  const _vp = (typeof vp === 'number' && isFinite(vp)) ? vp : 6.0;
+  const _vs = (typeof vs === 'number' && isFinite(vs)) ? vs : 3.5;
+  return { tP: R / _vp, tS: R / _vs, Rkm: R, Hkm };
 }
 
-/* ---------- 方位（度） ---------- */
-function bearingDeg(lat1, lon1, lat2, lon2) {
-  const toRad = Math.PI / 180, toDeg = 180 / Math.PI;
-  const φ1 = lat1 * toRad, φ2 = lat2 * toRad, dλ = (lon2 - lon1) * toRad;
-  const y = Math.sin(dλ) * Math.cos(φ2);
-  const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(dλ);
-  return (Math.atan2(y, x) * toDeg + 360) % 360;
+/* 方位 */
+const bearingDeg = (typeof window !== 'undefined' && typeof window.bearingDeg === 'function')
+  ? window.bearingDeg
+  : function _bearingDeg(lat1, lon1, lat2, lon2){
+      const toRad=Math.PI/180,toDeg=180/Math.PI;
+      const φ1=lat1*toRad, φ2=lat2*toRad, dλ=(lon2-lon1)*toRad;
+      const y=Math.sin(dλ)*Math.cos(φ2);
+      const x=Math.cos(φ1)*Math.sin(φ2)-Math.sin(φ1)*Math.cos(φ2)*Math.cos(dλ);
+      return (Math.atan2(y,x)*toDeg+360)%360;
+    };
+
+/* 震源タイプ推定（フォールバック） */
+const classifySourceSafe = (typeof classifySource === 'function')
+  ? classifySource
+  : function _classifySourceFallback(dep, lat, lng){
+      if (dep >= 60)   return 'intraslab';   // スラブ内（深発）
+      if (dep >= 20)   return 'interface';   // プレート境界
+      return 'crustal';                      // 内陸（直下型）
+    };
+
+/* 破壊スケール簡易モデル */
+const ruptureExtentKmFromM = (typeof window !== 'undefined' && typeof window.ruptureExtentKmFromM === 'function')
+  ? window.ruptureExtentKmFromM
+  : function _ruptureExtentKmFromM(M){
+      const R0 = Math.max(5, Math.pow(10, 0.5*M - 1.0)); // Mw7→~20km 目安
+      return { R0 };
+    };
+
+/* サイト増幅（座標→地盤）。未知なら 1.0 */
+const siteAmplification = (typeof window !== 'undefined' && typeof window.siteAmplification === 'function')
+  ? window.siteAmplification
+  : function _siteAmplification(){ return 1.0; };
+
+/* 学習補正（あれば適用） */
+function gmdbPredictCorrSafe(M, dep, Rhyp, mech, eLat, eLng, sLat, sLng){
+  try{
+    if (typeof GMDB === 'undefined' || !GMDB || typeof GMDB.predictCorr !== 'function') return 1.0;
+    if (![_num(eLat),_num(eLng),_num(sLat),_num(sLng)].every(Boolean)) return 1.0;
+    const c = GMDB.predictCorr(M, dep, Rhyp, mech, eLat, eLng, sLat, sLng);
+    return _num(c) ? c : 1.0;
+  }catch{return 1.0;}
 }
 
-/* ---------- 異常震域ブースト（深発強化版） ---------- */
-function abnormalIntensityBoost(depthKm, epiLat, epiLng, stLat, stLng, Rkm) {
-  const d = clampDepth(depthKm);
+/* —— 物理寄り PGA（g） —— */
+function physPGA_g(M, dep, Rhyp, mech, epiLat, epiLng, stLat, stLng){
+  if (!_num(M) || !_num(dep) || !_num(Rhyp)) return 1e-6;
 
-  // 深いほどリング中心を外側へ：R0 ≈ 50 + 0.9*depth
-  // 例) depth=670km → R0 ≈ 653+50 ≈ 703km
-  const R0   = 50 + 0.9 * d;
-  const sigR = 260;   // リング幅を広めに
-  const A    = 1.10;  // リング増幅（最大 +110%）
-  const sNear = 120;  // 近距離抑制の広がりを小さめに
-  const D     = 0.25; // 近距離抑制度合い
-  const ring  = 1 + A * Math.exp(-0.5 * ((Rkm - R0) / sigR) ** 2)
-                  - D * Math.exp(-0.5 * (Rkm / sNear) ** 2);
+  const Mcl = clampMag(M);
+  const depCl = clampDepth(dep);
+  const Rh = Math.max(1, Rhyp);
 
-  // 方位ローブ：本州方向をやや広く（±50°）
-  const HONSHU = { lat: 37.5, lng: 138.5 };
-  const azGuide = bearingDeg(epiLat, epiLng, HONSHU.lat, HONSHU.lng);
-  const azToSta = bearingDeg(epiLat, epiLng, stLat, stLng);
-  const dAz   = (Math.abs(azToSta - azGuide) + 540) % 360 - 180;
-  const sigAz = 50;
-  const C     = 0.35;
-  const lobe  = 1 + C * Math.exp(-0.5 * (dAz / sigAz) ** 2);
+  // 源特性（Brune 簡略）
+  const M0 = Math.pow(10, 1.5*Mcl + 9.1);                 // N·m
+  const Δσ = (mech==='crustal' ? 3 : mech==='interface' ? 2 : 4) * 1e6; // Pa
+  const { R0 } = ruptureExtentKmFromM(Mcl, mech||'crustal');
+  const fc = 4.9e6 * Math.pow(Δσ/M0, 1/3);                // Hz
+  const fPGA = 10;                                        // 代表周波数
 
-  // 日本列島～本州弧の「波導」っぽい利得（遠距離域で底上げ）
-  // だいたい 300–1200kmに広く効かせ、中心は ~750km
-  const G = 1 + 0.50 * Math.exp(-0.5 * ((Rkm - 750) / 300) ** 2);
+  // 幾何減衰（有限断層スケール）
+  const Reff = Math.sqrt(Rh*Rh + (0.7*R0)*(0.7*R0));
 
-  // 駆動域：日本の緯度経度帯に入っていたら、わずかに底上げ（地盤/盆地の平均化）
-  const inJapanArc = (stLat >= 31 && stLat <= 44 && stLng >= 130 && stLng <= 145) ? 1.10 : 1.00;
+  // 経路 Q（深発/スラブは高Q）
+  const Vs_path = (mech==='intraslab'||depCl>60) ? 4.0 : 3.5; // km/s
+  const Q0 = (mech==='intraslab'||depCl>60) ? 900 : 600;
+  const η = 0.7;
+  const Qf = Q0 * Math.pow(fPGA, η);
 
-  // 係数の上下限をやや広めに（全土で広く揺れる事例を再現）
-  return Math.max(0.7, Math.min(3.0, ring * lobe * G * inJapanArc));
-}
+  // 源スペクトル / 吸収
+  const S = M0 / (1 + (fPGA/fc)*(fPGA/fc));
+  let anelastic = Math.exp(-Math.PI * fPGA * (Reff*1000) / (Qf * Vs_path*1000));
+  if (!_num(anelastic)) anelastic = 0.5;
 
-/* ---------- PGA推定（深発対応・異常震域・εフロア強化） ---------- */
-function estimatePGA(M, Rkm, depthKm = null, epiLat = null, epiLng = null, stLat = null, stLng = null) {
-  const ctx = __LAST_ARR_CTX || {};
-  const dep  = clampDepth(depthKm != null ? depthKm : (ctx.dep != null ? ctx.dep : 30));
-  const rkm  = Math.max(1, isFinite(Rkm) ? Rkm : (ctx.Rkm || 50));
-  const eLat = (epiLat != null ? epiLat : ctx.epiLat);
-  const eLng = (epiLng != null ? epiLng : ctx.epiLng);
-  const sLat = (stLat != null ? stLat : ctx.stLat);
-  const sLng = (stLng != null ? stLng : ctx.stLng);
-
-  // 深さでタイプを分ける
-  const type = (dep >= 60) ? 'slab' : (dep >= 20 ? 'interface' : 'crust');
-
-  // 減衰パラメタ（深発はさらに緩く & 深さ項強め）
-  const baseD = Math.max(0, dAtt);
-  const params = {
-    crust:     { a: -1.10, b: 0.45, c: 1.10, h: 10, d: baseD * 1.00, kDepth: -0.0004 },
-    interface: { a: -1.30, b: 0.43, c: 1.15, h: 16, d: baseD * 0.85, kDepth: -0.0001 },
-    slab:      { a: -1.50, b: 0.44, c: 0.95, h: 45, d: Math.max(0.0004, baseD * 0.45), kDepth: +0.0016 }
-    // ↑ slab: 減衰(d)をかなり緩く、深さ係数を強め、hも大きめ
-  };
-  const p = params[type];
-
-  // 有効距離（浅部ハードニング）
-  const Reff = Math.sqrt(rkm * rkm + p.h * p.h);
-
-  // 対数モデル（g）
-  let lg  = p.a + p.b * M - p.c * Math.log10(Reff) - p.d * Reff + p.kDepth * dep;
-  let PGA = Math.pow(10, lg);
-
-  // 深発・超深発での広域利得
-  if (dep >= 250 && isFinite(eLat) && isFinite(eLng) && isFinite(sLat) && isFinite(sLng)) {
-    PGA *= abnormalIntensityBoost(dep, eLat, eLng, sLat, sLng, rkm);
+  // 深発リング/ローブ
+  let deepGain = 1.0;
+  const deepOK = _num(epiLat)&&_num(epiLng)&&_num(stLat)&&_num(stLng);
+  if (depCl>=250 && deepOK) {
+    const R0ring = 50 + 0.9*depCl, sigR=260;
+    const ring = Math.exp(-0.5*((Reff-R0ring)/sigR)**2);
+    const HONSHU = {lat:37.5,lng:138.5};
+    const dAz = (((Math.abs(bearingDeg(epiLat,epiLng, stLat,stLng) - bearingDeg(epiLat,epiLng,HONSHU.lat,HONSHU.lng)))+540)%360)-180;
+    const lobe = Math.exp(-0.5*(dAz/50)**2);
+    deepGain *= (1 + 0.5*ring + 0.3*lobe);
   }
 
-  // 過度な 0 落ち回避（遠距離の有感を拾う）
-  const EPS = 3e-6; // 0.000003 g（従来 1e-6 より高め）
-  return Math.max(EPS, PGA);
+  // サイト（座標が無ければ無補正）
+  const site = (_num(stLat)&&_num(stLng)) ? siteAmplification(stLat, stLng) : 1.0;
+
+  // ★スケール定数：実動域に合わせて大幅上方修正（旧 1.6e-22 → 新 2.0e-19）
+  const C0 = 2.0e-19;
+
+  const out = C0 * S / Reff * anelastic * deepGain * site;
+  return Math.max(1e-6, _num(out) ? out : 1e-6);
 }
+
+/* —— 経験式フォールバック（g）：小さく出たときの救済用 —— */
+function legacyEmpiricalPGA_g(M, ReffKm, dep, mech){
+  const dBase = Math.max(0, (typeof dAtt==='number' && isFinite(dAtt)) ? dAtt : 0.0012);
+  const p = (mech==='crustal')
+    ? { a:-1.10, b:0.45, c:1.10, h:10, d:dBase*1.00, kDepth:-0.0004 }
+    : (mech==='interface')
+      ? { a:-1.30, b:0.43, c:1.15, h:16, d:dBase*0.85, kDepth:-0.0001 }
+      : { a:-1.50, b:0.44, c:0.95, h:45, d:Math.max(0.0004, dBase*0.45), kDepth:+0.0016 };
+  const Reff = Math.sqrt(Math.max(1,ReffKm)*Math.max(1,ReffKm) + p.h*p.h);
+  const lg = p.a + p.b*clampMag(M) - p.c*Math.log10(Reff) - p.d*Reff + p.kDepth*clampDepth(dep);
+  return Math.max(1e-6, Math.pow(10, lg));
+}
+
+/* —— 最終 PGA 推定 —— */
+function estimatePGA(M, Rkm, depthKm=null, epiLat=null, epiLng=null, stLat=null, stLng=null){
+  const ctx = __LAST_ARR_CTX || {};
+  const dep  = clampDepth(depthKm!=null ? depthKm : (ctx.dep ?? 30));
+  const Rhyp = Math.max(1, _num(Rkm) ? Rkm : (ctx.Rkm ?? 50));
+
+  // 座標フォールバック（欠損でもNaNにしない）
+  const eLat = _num(epiLat) ? epiLat : (_num(ctx.epiLat) ? ctx.epiLat : 36.0);
+  const eLng = _num(epiLng) ? epiLng : (_num(ctx.epiLng) ? ctx.epiLng : 138.0);
+  const sLat = _num(stLat)  ? stLat  : (_num(ctx.stLat)  ? ctx.stLat  : eLat);
+  const sLng = _num(stLng)  ? stLng  : (_num(ctx.stLng)  ? ctx.stLng  : eLng);
+
+  const mech = classifySourceSafe(dep, eLat, eLng) || (dep>=60 ? 'intraslab' : 'crustal');
+
+  // 物理 + 学習補正 + 微小ゆらぎ
+  let pPhys = physPGA_g(clampMag(M), dep, Rhyp, mech, eLat, eLng, sLat, sLng);
+  if (!_num(pPhys)) pPhys = 1e-5;
+
+  const corr   = gmdbPredictCorrSafe(clampMag(M), dep, Rhyp, mech, eLat, eLng, sLat, sLng);
+  const jitter = ((Math.sin((eLat*7.3+eLng*3.1+sLat*11.7+sLng*5.9)*12.99)*0.5)+0.5)*0.16 + 0.92;
+
+  let pgaPhys = pPhys * corr * jitter;
+
+  // 経験式フォールバックとブレンド（小さく出過ぎを防止）
+  const pgaEmp  = legacyEmpiricalPGA_g(M, Rhyp, dep, mech);
+  // 物理7割 + 経験3割、かつ少なくとも経験式の 40% は下回らない
+  const pgaBlend = Math.max(0.4 * pgaEmp, 0.7 * pgaPhys + 0.3 * pgaEmp);
+
+  // 低すぎるときのフロア（0.002 Gal）
+  const PGA = Math.max(2e-6, _num(pgaBlend) ? pgaBlend : 2e-6);
+  return PGA;
+}
+
+
 
   /* ------------------------------------------------------------
    * 海域ベースン（津波）＆ JMA 震央地名（簡易ポリゴン/BB）
